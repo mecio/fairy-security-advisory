@@ -9,6 +9,8 @@ and the project intends to use [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Run check now presents an animated fAIry workflow linked to actual check and
+  AI phase events, with the detailed process log in a separate panel.
 - The desktop application now presents a versioned first-run EULA notice with
   an explicit acceptance checkbox; the acceptance version and UTC timestamp
   remain in ignored local configuration.
@@ -23,6 +25,8 @@ and the project intends to use [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- The Run check fairy now faces incoming sources and projects, turns toward
+  matching, and casts an animated wand trail during consolidation.
 - Successful terminal handoffs close the desktop window automatically; active
   analysis and chat processes block the handoff until they finish.
 - The desktop sidebar now groups operational pages, administration pages, and

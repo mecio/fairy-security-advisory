@@ -56,6 +56,7 @@ from desktop.config_forms import (
     ProjectsConfigForm, ReportsConfigForm,
 )
 from desktop.inventory_technologies_dialog import InventoryTechnologiesDialog
+from desktop.run_visualization import RunJourneyWidget
 
 
 STYLE = """
@@ -67,6 +68,7 @@ QListWidget#navigation { background: #0d1e35; border: 0; padding: 12px; }
 QListWidget#navigation::item { padding: 0 14px; border-radius: 7px; margin: 3px 2px; }
 QListWidget#navigation::item:selected { background: #123e5a; color: #63e7ff; }
 QFrame#card { background: #10243d; border: 1px solid #1b3c58; border-radius: 10px; }
+QFrame#card QLabel { background: transparent; }
 QLabel#metricValue { color: #63e7ff; font-size: 28px; font-weight: 700; }
 QLabel#chartLabel { color: #c9dded; }
 QProgressBar { background: #07101e; border: 1px solid #24415b; border-radius: 5px; height: 14px; text-align: center; }
@@ -285,6 +287,7 @@ class MainWindow(QMainWindow):
         self.process.setProcessEnvironment(process_environment)
         self.process.readyReadStandardOutput.connect(self._read_process_output)
         self.process.finished.connect(self._process_finished)
+        self.process.errorOccurred.connect(self._process_error)
         self.chat_process = QProcess(self)
         self.chat_process.setWorkingDirectory(str(services.ROOT))
         self.chat_process.setProcessChannelMode(QProcess.ProcessChannelMode.SeparateChannels)
@@ -588,6 +591,7 @@ class MainWindow(QMainWindow):
         buttons.addWidget(import_backup)
         buttons.addStretch()
         layout.addLayout(buttons)
+
         self.config_action_buttons = {
             "initialize": initialize,
             "reload": reload_button,
@@ -1117,6 +1121,11 @@ class MainWindow(QMainWindow):
         buttons.addStretch()
         layout.addLayout(buttons)
 
+        self.run_journey = RunJourneyWidget(
+            services.ROOT / "desktop/assets/fairy-security-advisory-icon.png"
+        )
+        layout.addWidget(self.run_journey, 2)
+
         activity = QFrame()
         activity.setObjectName("card")
         activity_layout = QHBoxLayout(activity)
@@ -1140,15 +1149,24 @@ class MainWindow(QMainWindow):
         activity_layout.addWidget(self.analysis_elapsed_label)
         layout.addWidget(activity)
 
+        log_card = QFrame()
+        log_card.setObjectName("card")
+        log_layout = QVBoxLayout(log_card)
+        log_layout.setContentsMargins(14, 10, 14, 12)
+        log_header = QHBoxLayout()
+        log_header.addWidget(QLabel("Detailed log"))
+        log_header.addStretch()
+        clear = QPushButton("Clear log")
+        clear.setProperty("variant", "secondary")
+        clear.clicked.connect(lambda: self.log.clear())
+        log_header.addWidget(clear)
+        log_layout.addLayout(log_header)
         self.log = QPlainTextEdit()
         self.log.setReadOnly(True)
         self.log.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
         self.log.setPlaceholderText("Process output will appear here.")
-        layout.addWidget(self.log, 1)
-        clear = QPushButton("Clear log")
-        clear.setProperty("variant", "secondary")
-        clear.clicked.connect(self.log.clear)
-        layout.addWidget(clear, alignment=Qt.AlignmentFlag.AlignLeft)
+        log_layout.addWidget(self.log, 1)
+        layout.addWidget(log_card, 1)
         return page
 
     def _status_page(self) -> QWidget:
@@ -2565,6 +2583,7 @@ class MainWindow(QMainWindow):
         self.log.appendPlainText(f"\n$ {shlex.join(command)}\n")
         self.current_action = action
         self.process_output_buffer = ""
+        self.run_journey.start(action)
         if action == "ai-check":
             self._start_analysis_activity()
         self.stop_button.setEnabled(True)
@@ -2617,6 +2636,7 @@ class MainWindow(QMainWindow):
         self._update_analysis_activity_clock()
 
     def _handle_analysis_progress(self, event: dict[str, object]) -> None:
+        self.run_journey.progress(event)
         phase = str(event.get("phase") or "analysis").replace("_", " ")
         status = str(event.get("status") or "running")
         provider = str(event.get("provider") or "AI").title()
@@ -2680,26 +2700,39 @@ class MainWindow(QMainWindow):
         self.global_analysis_label.setVisible(False)
         self.global_analysis_progress.setVisible(False)
 
-    def _process_finished(self, exit_code: int, _status: QProcess.ExitStatus) -> None:
+    def _process_finished(self, exit_code: int, status: QProcess.ExitStatus) -> None:
         self._read_process_output()
         if self.process_output_buffer:
             if not self._consume_analysis_progress_line(self.process_output_buffer):
                 self._append_process_output(self.process_output_buffer)
             self.process_output_buffer = ""
         self.log.appendPlainText(f"\nProcess finished with exit code {exit_code}.\n")
+        successful = exit_code == 0 and status == QProcess.ExitStatus.NormalExit
+        self.run_journey.finish(successful)
         if self.current_action == "ai-check" and self.analysis_started_at is not None:
-            self._finish_analysis_activity(exit_code == 0)
+            self._finish_analysis_activity(successful)
         self.current_action = None
         self.stop_button.setEnabled(False)
         self.statusBar().showMessage(
-            "Operation completed" if exit_code == 0 else f"Operation failed with exit code {exit_code}", 8000,
+            "Operation completed" if successful else f"Operation failed with exit code {exit_code}", 8000,
         )
-        if exit_code == 0:
+        if successful:
             try:
                 services.archive_closed_followups(services.ROOT)
             except (OSError, ValueError) as error:
                 self.log.appendPlainText(f"\nFollow-up archival warning: {error}\n")
         self.refresh_all()
+
+    def _process_error(self, error: QProcess.ProcessError) -> None:
+        if error != QProcess.ProcessError.FailedToStart:
+            return
+        self.run_journey.finish(False)
+        if self.current_action == "ai-check" and self.analysis_started_at is not None:
+            self._finish_analysis_activity(False)
+        self.log.appendPlainText(f"\nCould not start process: {self.process.errorString()}\n")
+        self.current_action = None
+        self.stop_button.setEnabled(False)
+        self.statusBar().showMessage("Could not start operation", 8000)
 
     def stop_process(self) -> None:
         if self.process.state() == QProcess.ProcessState.NotRunning:

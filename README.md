@@ -566,7 +566,10 @@ boundary cannot be created. fAIry never switches Codex to
 
 While an analysis is running, the desktop footer remains visible on every page
 and identifies the active provider and phase. The Run check page also shows
-elapsed time and completed projects. Progress advances only at verified
+the animated fAIry workflow, a separate detailed process log, elapsed time,
+and completed projects. The animation follows real phase events but illustrates
+the workflow rather than measuring individual file or network requests.
+Progress advances only at verified
 provider-group boundaries because Codex and Claude do not expose a dependable
 per-project percentage while a single CLI request is running.
 

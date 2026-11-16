@@ -17,6 +17,7 @@ try:
     from desktop.eula_dialog import EulaDialog
     from desktop.inventory_technologies_dialog import InventoryTechnologiesDialog
     from desktop.main_window import BarChartCard, MainWindow
+    from desktop.run_visualization import RunJourneyWidget
 except ImportError:
     QApplication = None
     BarChartCard = None
@@ -27,6 +28,7 @@ except ImportError:
     Qt = None
     EulaDialog = None
     InventoryTechnologiesDialog = None
+    RunJourneyWidget = None
 
 
 @unittest.skipUnless(QApplication is not None, "optional PySide6 dependency is not installed")
@@ -68,6 +70,7 @@ class DesktopWindowTest(unittest.TestCase):
     def test_ai_analysis_progress_is_visible_across_pages(self) -> None:
         application = QApplication.instance() or QApplication([])
         window = MainWindow()
+        window.run_journey.start("ai-check")
         window._start_analysis_activity()
         self.assertTrue(window.global_analysis_label.isVisibleTo(window.statusBar()))
         self.assertEqual(window.analysis_project_progress.maximum(), 0)
@@ -82,6 +85,9 @@ class DesktopWindowTest(unittest.TestCase):
         self.assertEqual(window.analysis_project_progress.value(), 2)
         self.assertIn("Claude", window.analysis_activity_label.text())
         self.assertIn("3 projects", window.analysis_activity_label.text())
+        self.assertEqual(window.run_journey.phase, "evidence")
+        self.assertEqual(window.run_journey.agent, "Claude")
+        self.assertEqual(window.run_journey.state, "running")
         self.assertNotIn(marker, window.log.toPlainText())
 
         window.navigation.setCurrentRow(0)
@@ -94,8 +100,49 @@ class DesktopWindowTest(unittest.TestCase):
         })
         self.assertEqual(window.analysis_project_progress.value(), 5)
         self.assertIn("completed", window.analysis_activity_label.text().casefold())
+        self.assertEqual(window.run_journey.state, "completed")
+        self.assertFalse(window.run_journey.timer.isActive())
         window.close()
         window.deleteLater()
+        application.processEvents()
+
+    def test_run_journey_renders_and_tracks_non_ai_checks(self) -> None:
+        application = QApplication.instance() or QApplication([])
+        journey = RunJourneyWidget(
+            services.ROOT / "desktop/assets/fairy-security-advisory-icon.png"
+        )
+        journey.resize(720, 200)
+        journey.start("sources")
+        self.assertEqual(journey._active_edges(), {"sources"})
+        self.assertEqual(journey._face_scale(), -1.0)
+        self.assertFalse(journey.grab().isNull())
+        journey.finish(False)
+        self.assertEqual(journey.state, "failed")
+        self.assertFalse(journey.timer.isActive())
+        journey.close()
+        journey.deleteLater()
+        application.processEvents()
+
+    def test_run_journey_turns_to_matching_and_casts_spell(self) -> None:
+        application = QApplication.instance() or QApplication([])
+        journey = RunJourneyWidget(
+            services.ROOT / "desktop/assets/fairy-security-advisory-icon.png"
+        )
+        journey.resize(720, 200)
+        journey.start("ai-check")
+        journey.progress({"phase": "evidence", "status": "running"})
+        self.assertEqual(journey._face_scale(), -1.0)
+        journey.progress({"phase": "consolidation", "status": "running"})
+        self.assertEqual(journey._face_scale(), -1.0)
+        for _ in range(journey.TURN_FRAMES):
+            journey._advance()
+        self.assertEqual(journey._face_scale(), 1.0)
+        self.assertNotEqual(journey._wand_angle(), 0.0)
+        self.assertFalse(journey.grab().isNull())
+        journey.finish(True)
+        self.assertEqual(journey._wand_angle(), 0.0)
+        journey.close()
+        journey.deleteLater()
         application.processEvents()
 
     def test_sandbox_terminal_handoff_closes_gui_only_after_successful_launch(self) -> None:

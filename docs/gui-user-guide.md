@@ -481,6 +481,21 @@ The Run security checks page contains deterministic preparation commands and
 the complete AI-assisted workflow. Choose an AI provider, model profile, and
 execution mode before starting the full analysis.
 
+The prominent **fAIry at work** panel shows advisory sources and local projects
+flowing toward the fairy, then matching and reporting. Highlighted paths and
+sparkles follow the current operation: source checks light the advisory path,
+inventory refresh lights the project path, and a complete AI analysis changes
+phase as the coordinator emits routing, evidence, consolidation, and completion
+events. While collecting sources and project evidence the fairy faces those
+inputs. At matching time she turns toward **Match & verify**, waves her wand,
+and sends a sparkle trail to the matching stage. The animation illustrates the
+workflow; it is not a live network map or
+a percentage of files scanned. The phase, provider, elapsed time, and project
+count come from actual process events. Project counts advance at provider group
+boundaries. The **Detailed log** below the animation retains the process output
+and is the place to read errors and evidence; **Clear log** only clears that
+on-screen view.
+
 ### Check prerequisites
 
 **Check prerequisites** verifies that required commands, agent authentication,
