@@ -42,12 +42,13 @@ Run a repeatable, evidence-based, read-only check against inventoried projects. 
    verify primary-source evidence itself.
 3. Correlate advisories with the selected inventory scope: packages, runtimes,
    frontend/backend, databases, web servers, operating systems, containers,
-   virtualization, CI/CD, IaC, appliances, and supply chain. Treat each
-   project's `advisory_checks.preferred_ai` value as a soft routing preference:
-   `codex` or `claude` expresses the user's preference and `null` leaves it
-   unspecified. The agent chosen to launch the complete analysis remains in
-   control; record a relevant limitation instead of inventing cross-provider
-   execution when the preferred provider is unavailable or different.
+   virtualization, CI/CD, IaC, appliances, and supply chain. When the launcher
+   supplies an `output/analysis-runs/*/plan.json`, treat it as the authoritative
+   boundary and routing plan. `preferred_ai: codex` or `claude` routes the
+   project to that CLI; `null` routes it to the coordinator selected at launch.
+   Other-provider phases are read-only and return a dossier. Only the
+   coordinator may merge dossiers, deduplicate findings, and update canonical
+   reports. Stop without updating reports if a required evidence phase fails.
 4. Open every candidate advisory and collect its identifier/CVE, affected and fixed versions, prerequisites, vector, mitigations, and date. Confirm through primary sources in this order: vendor, official project, CVE record. Treat aggregators as signals, not sole evidence.
 5. Check manifests and lockfiles and, when possible without mutation, installed versions. Always distinguish presence, declared version, verified installed version, and production. Never infer production from local development.
 6. If `osv-scanner` or `trivy` is available, use it read-only on relevant targets and record the command, version, and summary. If missing, run the validator and show the suggested Linux commands, making clear that execution requires review and explicit authorization; read [references/linux-tool-installation.md](references/linux-tool-installation.md) when explaining alternatives. Do not install tools or update databases/caches without an explicit request, and do not treat an automated finding as proven applicability.
@@ -79,5 +80,8 @@ Repeat all unfinished activities in the daily report. Do not mark a vulnerabilit
 - Keep every environment-derived report, finding, path, version, project
   identifier, and follow-up record below the Git-ignored `output/` directory or
   in `config/local/projects.yaml`; never copy it into versioned files.
+- In routed mode, do not broaden the plan scope. Evidence agents must not write
+  files or invoke scanners; the coordinator may run scanners only on selected
+  paths and is the sole writer of canonical output.
 - Request authorization before checking servers or production.
 - If a source is unavailable, record the limitation; never invent missing data.

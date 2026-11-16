@@ -24,5 +24,7 @@ inventory:
   max_files_per_project: 20000
   # Detected projects receive local-only advisory_checks settings after discovery:
   # advisory_checks: {enabled: true, preferred_ai: null}
-  # preferred_ai may be null, codex, or claude. These choices survive inventory refreshes.
+  # preferred_ai may be null, codex, or claude. Null inherits the coordinator
+  # selected at launch; explicit providers route that project to the matching CLI.
+  # These choices survive inventory refreshes.
   projects: []

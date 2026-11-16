@@ -159,6 +159,8 @@ The desktop application provides:
   optional Codex/Claude preference;
 - rendered daily reports and summary, plus an interactive follow-up table with
   primary-source links for advisories and CVEs;
+- a local year/month analysis-log archive with summary, event, routing, AI
+  output, evidence viewing, and confirmed per-run deletion;
 - an AI issue assistant linked to one open follow-up ID and project at a time;
 - system and optional-tool status;
 - Linux application-menu integration with contextual Install/Remove actions;
@@ -297,10 +299,11 @@ After discovery, the desktop **Technology inventory** page provides a **Check**
 checkbox for each local project and a **Preferred AI** selector with `-`,
 `Codex`, and `Claude`. Unchecked projects remain inventoried but are excluded
 from advisory correlation, dependency checks, OSV-Scanner/Trivy targets, and
-new follow-up activities. `-` is the default and means no provider preference;
-Codex or Claude is a soft preference and does not override the agent explicitly
-chosen for a complete analysis. These settings are stored only in the ignored
-`config/local/projects.yaml` and survive inventory refreshes.
+new follow-up activities. `-` is the default and inherits the coordinator
+selected when the complete analysis starts. An explicit Codex or Claude choice
+routes that project to the matching authenticated CLI. These settings are
+stored only in the ignored `config/local/projects.yaml` and survive inventory
+refreshes.
 
 Supported advisory source types are `html`, `rss`, `atom`, `json`, `api`, and
 `repository`. Each source declares its name, URL, category or filter,
@@ -384,7 +387,8 @@ The shared skill reads the configuration, refreshes the inventory when
 necessary, checks active sources, verifies primary sources, correlates manifests
 and lockfiles, incorporates OSV-Scanner/Trivy results when available, and
 updates reports and follow-ups. It analyzes only inventory projects selected
-for advisory checks; per-project AI selections are treated as preferences.
+for advisory checks and routes explicit per-project AI selections to the
+matching CLI.
 
 ## Usage
 
@@ -432,7 +436,8 @@ agent, scanner, or system package is installed silently.
 
 Before option 10 starts an analysis, the service verifies that:
 
-- the selected AI CLI is installed and authenticated;
+- every AI CLI required by the project routing plan is installed and
+  authenticated;
 - local configuration exists and all enabled project roots are readable;
 - the inventory exists and is within `refresh_after_hours`, offering to refresh
   it when necessary;
@@ -458,15 +463,41 @@ $fairy-security-advisory run the complete security advisory check
 /fairy-security-advisory run the complete security advisory check
 ```
 
+Direct skill commands use only the agent in which they are invoked. Use menu
+option 10, `--action ai-check`, or the GUI button when per-project Codex/Claude
+routing is required.
+
 The complete workflow retrieves configured advisory sources, correlates them
 with the inventory and resolved dependencies, verifies primary sources where
 possible, reviews existing follow-ups, and writes the daily report, summary,
 and follow-up register.
 
-The Python scripts provide inventory and validation only; they do not by
-themselves download and interpret every advisory source. Source retrieval and
-applicability analysis are orchestrated by the shared AI skill used by Codex and
-Claude Code.
+Before launch, fAIry builds a private routing plan from Technology inventory.
+Projects marked `-` are assigned to the selected coordinator; explicit Codex or
+Claude projects are assigned to that provider and its model from the selected
+profile. Other-provider groups run first in read-only evidence mode and write
+private dossiers below `output/analysis-runs/`. The coordinator then analyzes
+its own group, verifies and merges the dossiers, deduplicates findings, and is
+the only process allowed to update canonical reports. The run stops before
+report updates when a required provider is missing, unauthenticated, or its
+evidence phase fails.
+
+Each `output/analysis-runs/YYYY/MM/<run-id>/` directory also contains a compact
+`run-summary.txt` with one field per line, a chronological `run.log`, the
+private routing `plan.json`, and
+`coordinator-output.md` when consolidation starts. The summary identifies the
+local operator, coordinator, providers, models, project counts, timestamps,
+duration, phase results, and final exit code. Provider account e-mail addresses
+and credentials are never recorded.
+
+The desktop **Logs** page browses these archives and can permanently delete one
+confirmed run at a time without affecting reports, follow-up, configuration, or
+scanned projects. Empty archive folders are removed automatically.
+
+The Python scripts deterministically build the inventory and routing plan,
+validate prerequisites, isolate evidence, and coordinate provider execution.
+Source interpretation and applicability analysis remain the responsibility of
+the shared AI skill used by Codex and Claude Code.
 
 ### Subsequent checks
 

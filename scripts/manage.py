@@ -8,11 +8,13 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import getpass
 import json
 import os
 import shutil
 import subprocess
 import sys
+import time
 import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
@@ -54,6 +56,16 @@ try:
     from ai_usage import run_tracked_command
 except ImportError:
     from scripts.ai_usage import run_tracked_command
+try:
+    from analysis_plan import (
+        AnalysisPlanError, append_private_line, build_analysis_plan, plan_summary,
+        required_providers, write_private_json, write_private_text,
+    )
+except ImportError:
+    from scripts.analysis_plan import (
+        AnalysisPlanError, append_private_line, build_analysis_plan, plan_summary,
+        required_providers, write_private_json, write_private_text,
+    )
 try:
     from desktop_integration import install_linux_desktop_entry, remove_linux_desktop_entry
 except ImportError:
@@ -599,6 +611,7 @@ def validate_project_license() -> int:
     for relative in (
         "scripts/fairy-security-advisory",
         "scripts/manage.py",
+        "scripts/analysis_plan.py",
         "scripts/inventory.py",
         "scripts/validate_project.py",
         "desktop/__init__.py",
@@ -608,6 +621,7 @@ def validate_project_license() -> int:
         "desktop/services.py",
         "tests/test_desktop_services.py",
         "tests/test_desktop_ui.py",
+        "tests/test_analysis_plan.py",
         "tests/test_inventory.py",
         "tests/test_manage.py",
     ):
@@ -655,7 +669,8 @@ def show_skill_usage() -> int:
     )
     print(f"  Codex ({models['codex']}):       $fairy-security-advisory run the complete security advisory check")
     print(f"  Claude Code ({models['claude']}): /fairy-security-advisory run the complete security advisory check")
-    print("The interactive launcher handles deterministic local operations; the AI skill handles advisory interpretation and applicability.")
+    print("Use menu option 10 or --action ai-check for per-project Codex/Claude routing.")
+    print("A direct skill invocation uses only the agent in which it was started.")
     return 0
 
 
@@ -744,7 +759,7 @@ def choose_execution_mode() -> str | None:
     return None
 
 
-def analysis_prompt(provider: str, execution_mode: str | None = None) -> str:
+def execution_guidance(execution_mode: str | None = None) -> str:
     mode_name, mode = configured_execution(execution_mode)
     if mode.get("use_subagents"):
         execution_instruction = (
@@ -754,33 +769,80 @@ def analysis_prompt(provider: str, execution_mode: str | None = None) -> str:
     else:
         execution_instruction = "Process sources sequentially and do not create sub-agents."
     return (
-        f"{AI_PROMPTS[provider]}\n\n"
         f"Execution mode: {mode_name}. Read the effective AI configuration, preferring "
         f"config/local/ai-agents.yaml over config/ai-agents.yaml. {execution_instruction}"
     )
 
 
+def analysis_prompt(provider: str, execution_mode: str | None = None) -> str:
+    return f"{AI_PROMPTS[provider]}\n\n{execution_guidance(execution_mode)}"
+
+
+def scoped_evidence_prompt(
+    provider: str, projects: list[dict[str, str]], execution_mode: str | None = None,
+) -> str:
+    scope = json.dumps(projects, ensure_ascii=False, indent=2)
+    return (
+        f"Use the fairy-security-advisory instructions as an evidence analyst. "
+        f"This is the read-only {provider} evidence phase, not the final report phase.\n\n"
+        f"Authoritative project scope:\n{scope}\n\n"
+        "Analyze every and only the projects listed above. Do not inspect any other "
+        "inventory project. Do not modify files, do not update canonical reports or "
+        "follow-up records, and do not run OSV-Scanner or Trivy directly. Consult the "
+        "configured active advisory sources and primary sources as needed. Return one "
+        "self-contained Markdown dossier containing checked sources, candidate and "
+        "excluded advisories, manifest/lockfile evidence, applicability, risk, confidence, "
+        "recommended actions, and limitations. Include the project ID with every finding.\n\n"
+        + execution_guidance(execution_mode)
+    )
+
+
+def consolidation_prompt(
+    provider: str, plan_path: Path, dossiers: list[Path],
+    execution_mode: str | None = None,
+) -> str:
+    dossier_lines = "\n".join(f"- {path}" for path in dossiers) or "- none"
+    return (
+        f"{AI_PROMPTS[provider]}\n\n"
+        "Run in routed consolidation mode. The JSON plan below is the authoritative "
+        "project boundary; never analyze inventory projects absent from its selected "
+        "provider groups, and never scan entries in its excluded list. Analyze the "
+        f"projects assigned to {provider} directly. Read and critically verify the "
+        "read-only dossiers produced by other providers, deduplicate all findings, then "
+        "update the canonical daily report, summary, follow-up, and archive exactly once. "
+        "OSV-Scanner and Trivy may be used only against paths in the selected groups. "
+        "Record provider/model routing and any failed or missing dossier as a limitation.\n\n"
+        f"Analysis plan: {plan_path}\nOther-provider dossiers:\n{dossier_lines}\n\n"
+        + execution_guidance(execution_mode)
+    )
+
+
 def ai_command(
     provider: str, profile: str | None = None, execution_mode: str | None = None,
-    *, non_interactive: bool = False,
+    *, non_interactive: bool = False, prompt: str | None = None,
+    read_only: bool = False,
 ) -> list[str] | None:
     executable = resolve_agent_executable(provider)
     if not executable:
         return None
     _profile_name, models = configured_models(profile)
     model = models[provider]
-    prompt = analysis_prompt(provider, execution_mode)
+    prompt = prompt or analysis_prompt(provider, execution_mode)
     if provider == "codex":
         if non_interactive:
-            return [
-                executable, "--search", "exec", "--model", model,
-                "--sandbox", "workspace-write", "--approve-for-me", "--json", prompt,
-            ]
+            command = [executable, "--search", "--ask-for-approval", "never"]
+            command.extend(("exec", "--model", model))
+            if read_only:
+                command.extend(("--sandbox", "read-only"))
+            else:
+                command.extend(("--sandbox", "workspace-write"))
+            return [*command, "--json", prompt]
         return [executable, "--search", "--model", model, prompt]
     if non_interactive:
+        permission_mode = "plan" if read_only else "auto"
         return [
             executable, "--print", "--model", model,
-            "--permission-mode", "auto", "--permission-prompts", "none",
+            "--permission-mode", permission_mode, "--permission-prompts", "none",
             "--output-format", "stream-json", "--verbose", prompt,
         ]
     return [executable, "--model", model, prompt]
@@ -840,29 +902,173 @@ def run_ai_check(
             return 0
     profile_name, models = configured_models(profile)
     mode_name, _mode = configured_execution(execution_mode)
-    command = ai_command(
-        provider, profile_name, mode_name, non_interactive=non_interactive,
-    )
-    if command is None:
-        print(f"{provider} CLI is not available in PATH.", file=sys.stderr)
-        show_agent_installation(provider)
-        return 1
     if not prepare_analysis_service(provider, mode_name, assume_yes=assume_yes):
         print("Analysis was not started because one or more prerequisites failed.")
         return 1
+    try:
+        plan = build_analysis_plan(
+            safe_load_yaml(effective_config_path(CONFIG_DIR, "projects.example.yaml")), provider,
+        )
+    except AnalysisPlanError as error:
+        print(f"Unable to build analysis plan: {error}", file=sys.stderr)
+        return 1
+    if not plan["selected_count"]:
+        print("No inventory projects are selected for advisory analysis.", file=sys.stderr)
+        return 1
+    required = required_providers(plan)
+    for required_provider in required:
+        if required_provider == provider:
+            continue
+        if check_prerequisites(required_provider) != 0:
+            print(
+                f"Analysis requires {required_provider} for its preferred project group.",
+                file=sys.stderr,
+            )
+            return 1
+    summary = plan_summary(plan)
+    print(f"Analysis routing: {summary}")
     if not assume_yes and not confirm(
-        f"Start the complete {provider} advisory check with {models[provider]} "
-        f"({profile_name}, {mode_name})? "
-        "It may access the network and update ignored local outputs."
+        f"Start routed analysis with {provider} as coordinator and profile {profile_name} "
+        f"in {mode_name} mode? {summary}. It may access the network and update ignored "
+        "local outputs."
     ):
         print("Cancelled.")
         return 0
-    if non_interactive:
-        return run_tracked_command(
-            command, provider, model=models[provider], profile=profile_name,
-            execution_mode=mode_name,
+    started_at = dt.datetime.now(dt.timezone.utc)
+    timestamp = started_at.strftime("%Y%m%dT%H%M%SZ")
+    run_directory = (
+        ROOT / "output/analysis-runs" / started_at.strftime("%Y/%m")
+        / f"{timestamp}-{os.getpid()}"
+    )
+    plan_path = run_directory / "plan.json"
+    summary_path = run_directory / "run-summary.txt"
+    log_path = run_directory / "run.log"
+    coordinator_output = run_directory / "coordinator-output.md"
+    started_monotonic = time.monotonic()
+    phase_results: list[str] = []
+    plan["profile"] = profile_name
+    plan["execution_mode"] = mode_name
+    plan["models"] = {name: models[name] for name in required}
+    write_private_json(plan_path, plan)
+    append_private_line(
+        log_path,
+        f"{started_at.isoformat().replace('+00:00', 'Z')} START coordinator={provider} "
+        f"profile={profile_name} mode={mode_name}",
+    )
+
+    def finish_run(status: str, exit_code: int) -> int:
+        finished_at = dt.datetime.now(dt.timezone.utc)
+        duration = round(time.monotonic() - started_monotonic, 2)
+        append_private_line(
+            log_path,
+            f"{finished_at.isoformat().replace('+00:00', 'Z')} FINISH "
+            f"status={status} exit_code={exit_code} duration_seconds={duration}",
         )
-    return run_command(command)
+        groups = plan["groups"]
+        lines = [
+            f"Run ID: {run_directory.name}",
+            f"Status: {status}",
+            f"Exit code: {exit_code}",
+            f"Started UTC: {started_at.isoformat().replace('+00:00', 'Z')}",
+            f"Finished UTC: {finished_at.isoformat().replace('+00:00', 'Z')}",
+            f"Duration seconds: {duration}",
+            f"Operator: {getpass.getuser()}",
+            f"Coordinator: {provider}",
+            f"Profile: {profile_name}",
+            f"Execution mode: {mode_name}",
+            f"Selected projects: {plan['selected_count']}",
+            f"Excluded projects: {plan['excluded_count']}",
+            f"Codex projects: {len(groups['codex'])}",
+            f"Claude projects: {len(groups['claude'])}",
+        ]
+        lines.extend(
+            f"{name.title()} model: {models[name]}" for name in required
+        )
+        lines.extend(f"Phase: {result}" for result in phase_results)
+        lines.extend((
+            f"Plan: {plan_path.name}",
+            f"Event log: {log_path.name}",
+            f"Coordinator output: {coordinator_output.name if coordinator_output.is_file() else 'not produced'}",
+        ))
+        write_private_text(summary_path, "\n".join(lines))
+        return exit_code
+
+    dossiers: list[Path] = []
+    for worker in required:
+        if worker == provider:
+            continue
+        projects = plan["groups"][worker]
+        dossier = run_directory / f"{worker}-evidence.md"
+        command = ai_command(
+            worker, profile_name, mode_name, non_interactive=True,
+            prompt=scoped_evidence_prompt(worker, projects, mode_name), read_only=True,
+        )
+        if command is None:
+            print(f"{worker} CLI is unavailable after prerequisite checks.", file=sys.stderr)
+            phase_results.append(f"{worker} evidence — failed (CLI unavailable)")
+            return finish_run("failed", 1)
+        print(f"Collecting read-only {worker} evidence for {len(projects)} project(s)...")
+        append_private_line(
+            log_path,
+            f"{dt.datetime.now(dt.timezone.utc).isoformat().replace('+00:00', 'Z')} "
+            f"PHASE_START provider={worker} type=evidence projects={len(projects)}",
+        )
+        result = run_tracked_command(
+            command, worker, model=models[worker], profile=profile_name,
+            execution_mode=mode_name, capture_path=dossier, event_log_path=log_path,
+        )
+        if (
+            result != 0 or not dossier.is_file()
+            or not dossier.read_text(encoding="utf-8", errors="replace").strip()
+        ):
+            print(f"{worker} evidence phase failed; canonical reports were not updated.", file=sys.stderr)
+            phase_results.append(f"{worker} evidence — failed (exit {result or 1})")
+            append_private_line(
+                log_path,
+                f"{dt.datetime.now(dt.timezone.utc).isoformat().replace('+00:00', 'Z')} "
+                f"PHASE_FINISH provider={worker} type=evidence status=failed "
+                f"exit_code={result or 1}",
+            )
+            return finish_run("failed", result or 1)
+        phase_results.append(f"{worker} evidence — completed (exit 0)")
+        append_private_line(
+            log_path,
+            f"{dt.datetime.now(dt.timezone.utc).isoformat().replace('+00:00', 'Z')} "
+            f"PHASE_FINISH provider={worker} type=evidence status=completed exit_code=0",
+        )
+        dossiers.append(dossier)
+    command = ai_command(
+        provider, profile_name, mode_name, non_interactive=True,
+        prompt=consolidation_prompt(provider, plan_path, dossiers, mode_name),
+    )
+    if command is None:
+        print(f"{provider} CLI is unavailable after prerequisite checks.", file=sys.stderr)
+        phase_results.append(f"{provider} consolidation — failed (CLI unavailable)")
+        return finish_run("failed", 1)
+    print(
+        f"Consolidating with {provider} ({models[provider]}) for "
+        f"{len(plan['groups'][provider])} directly assigned project(s)..."
+    )
+    append_private_line(
+        log_path,
+        f"{dt.datetime.now(dt.timezone.utc).isoformat().replace('+00:00', 'Z')} "
+        f"PHASE_START provider={provider} type=consolidation "
+        f"projects={len(plan['groups'][provider])}",
+    )
+    result = run_tracked_command(
+        command, provider, model=models[provider], profile=profile_name,
+        execution_mode=mode_name, capture_path=coordinator_output,
+        event_log_path=log_path,
+    )
+    phase_status = "completed" if result == 0 else "failed"
+    phase_results.append(f"{provider} consolidation — {phase_status} (exit {result})")
+    append_private_line(
+        log_path,
+        f"{dt.datetime.now(dt.timezone.utc).isoformat().replace('+00:00', 'Z')} "
+        f"PHASE_FINISH provider={provider} type=consolidation status={phase_status} "
+        f"exit_code={result}",
+    )
+    return finish_run("completed" if result == 0 else "failed", result)
 
 
 def launch_desktop() -> int:

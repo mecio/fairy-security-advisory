@@ -10,8 +10,11 @@ and the project intends to use [Semantic Versioning](https://semver.org/).
 ### Changed
 
 - Technology inventory projects can now be included or excluded from advisory
-  analysis individually and assigned an optional Codex or Claude preference;
-  local choices survive inventory refreshes.
+  analysis individually and routed to Codex or Claude; `-` inherits the launch
+  coordinator, local choices survive inventory refreshes, provider evidence is
+  isolated, one coordinator consolidates canonical reports, and each run writes
+  a private line-oriented audit summary and chronological event log in a
+  year/month archive. The desktop Logs page can read and delete individual runs.
 - OSV-Scanner installation now prefers checksummed official Linux binaries on
   x86_64 and arm64, avoiding an unnecessary Go toolchain dependency.
 - The Go-based fallback validates the installed toolchain and blocks execution
@@ -19,6 +22,9 @@ and the project intends to use [Semantic Versioning](https://semver.org/).
 - Codex installation now uses OpenAI's standalone user installer without a
   Node.js/npm prerequisite, preserves IDE-managed copies, and gives fAIry a
   stable executable independent of the launching environment.
+- Non-interactive Codex checks now use an explicit no-prompt sandbox policy
+  that works without an IDE approval reviewer, and retain CLI diagnostics in
+  the private run log.
 - Claude Code installation now uses Anthropic's recommended native user
   installer instead of npm, preserving IDE-managed copies and providing the
   same stable executable resolution used for Codex.

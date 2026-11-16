@@ -101,6 +101,7 @@ def render() -> tuple[Path, Path]:
             stack.enter_context(patch.object(services, "inventory_projects", return_value=projects))
             stack.enter_context(patch.object(services, "inventory_age", return_value="demonstration data"))
             stack.enter_context(patch.object(services, "report_entries", return_value=report_entries))
+            stack.enter_context(patch.object(services, "analysis_run_entries", return_value=[]))
             stack.enter_context(patch.object(
                 services, "reports_config",
                 return_value={"followup_file": str(followup)},

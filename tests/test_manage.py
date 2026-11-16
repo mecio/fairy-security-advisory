@@ -2,10 +2,13 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from scripts.manage import (
-    ai_command, analysis_prompt, render_cli_banner, run_ai_check, source_request,
+    ai_command, analysis_prompt, render_cli_banner, run_ai_check,
+    scoped_evidence_prompt, source_request,
 )
 
 
@@ -78,15 +81,95 @@ class AdvisorySourceRequestTest(unittest.TestCase):
     @patch("scripts.manage.resolve_agent_executable", return_value="/usr/bin/codex")
     def test_codex_non_interactive_command_uses_exec(self, _which) -> None:
         command = ai_command("codex", non_interactive=True)
-        self.assertEqual(command[:3], ["/usr/bin/codex", "--search", "exec"])
-        self.assertIn("--approve-for-me", command)
+        self.assertEqual(command[:2], ["/usr/bin/codex", "--search"])
+        self.assertLess(command.index("--ask-for-approval"), command.index("exec"))
+        self.assertNotIn("--approve-for-me", command)
+        self.assertIn("workspace-write", command)
         self.assertIn("--json", command)
+
+    @patch("scripts.manage.resolve_agent_executable", return_value="/usr/bin/codex")
+    def test_codex_read_only_approval_option_precedes_exec(self, _which) -> None:
+        command = ai_command("codex", non_interactive=True, read_only=True)
+        self.assertLess(command.index("--ask-for-approval"), command.index("exec"))
+        self.assertIn("read-only", command)
+        self.assertNotIn("--approve-for-me", command)
 
     @patch("scripts.manage.resolve_agent_executable", return_value="/usr/bin/claude")
     def test_claude_non_interactive_command_uses_print_mode(self, _which) -> None:
         command = ai_command("claude", non_interactive=True)
         self.assertIn("--print", command)
         self.assertIn("stream-json", command)
+
+    def test_scoped_evidence_prompt_forbids_other_projects_and_writes(self) -> None:
+        prompt = scoped_evidence_prompt(
+            "claude", [{"id": "api", "path": "/projects/api"}], "economical",
+        )
+        self.assertIn("every and only", prompt)
+        self.assertIn("Do not modify files", prompt)
+        self.assertIn("do not run OSV-Scanner or Trivy", prompt)
+        self.assertNotIn("run the complete security advisory check", prompt)
+
+    @patch("scripts.manage.prepare_analysis_service", return_value=True)
+    @patch("scripts.manage.check_prerequisites", return_value=0)
+    @patch("scripts.manage.configured_models", return_value=(
+        "balanced", {"codex": "codex-model", "claude": "claude-model"},
+    ))
+    @patch("scripts.manage.configured_execution", return_value=(
+        "economical", {"use_subagents": False, "max_subagents": 0},
+    ))
+    @patch("scripts.manage.ai_command")
+    def test_routed_analysis_collects_other_provider_then_consolidates_once(
+        self, command, _execution, _models, prerequisites, _prepare,
+    ) -> None:
+        config = {"inventory": {"projects": [
+            {"id": "default", "path": "/projects/default", "advisory_checks": {
+                "enabled": True, "preferred_ai": None,
+            }},
+            {"id": "claude", "path": "/projects/claude", "advisory_checks": {
+                "enabled": True, "preferred_ai": "claude",
+            }},
+            {"id": "off", "path": "/projects/off", "advisory_checks": {
+                "enabled": False, "preferred_ai": None,
+            }},
+        ]}}
+        command.side_effect = lambda provider, *_args, **_kwargs: [provider, "run"]
+
+        def tracked(_command, _provider, **kwargs):
+            capture = kwargs.get("capture_path")
+            if capture:
+                capture.parent.mkdir(parents=True, exist_ok=True)
+                capture.write_text("# Evidence\n", encoding="utf-8")
+            return 0
+
+        with TemporaryDirectory() as directory, patch(
+            "scripts.manage.ROOT", Path(directory),
+        ), patch("scripts.manage.safe_load_yaml", return_value=config), patch(
+            "scripts.manage.run_tracked_command", side_effect=tracked,
+        ) as run:
+            result = run_ai_check(
+                "codex", "balanced", "economical", assume_yes=True,
+                non_interactive=True,
+            )
+            summaries = list((Path(directory) / "output/analysis-runs").rglob("run-summary.txt"))
+            self.assertEqual(len(summaries), 1)
+            run_directory = summaries[0].parent
+            summary = summaries[0].read_text(encoding="utf-8")
+            event_log = (run_directory / "run.log").read_text(encoding="utf-8")
+            self.assertTrue((run_directory / "coordinator-output.md").is_file())
+
+        self.assertEqual(result, 0)
+        self.assertIn("Status: completed", summary)
+        self.assertIn("Coordinator: codex", summary)
+        self.assertIn("Codex model: codex-model", summary)
+        self.assertIn("Claude model: claude-model", summary)
+        self.assertIn("Phase: claude evidence — completed (exit 0)", summary)
+        self.assertIn("Phase: codex consolidation — completed (exit 0)", summary)
+        self.assertIn("type=evidence status=completed", event_log)
+        self.assertIn("type=consolidation status=completed", event_log)
+        prerequisites.assert_called_once_with("claude")
+        self.assertEqual([call.args[1] for call in run.call_args_list], ["claude", "codex"])
+        self.assertTrue(command.call_args_list[0].kwargs["read_only"])
+        self.assertNotIn("read_only", command.call_args_list[1].kwargs)
 
     @patch("builtins.print")
     @patch("scripts.manage.run_command")

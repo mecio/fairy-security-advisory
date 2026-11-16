@@ -117,6 +117,17 @@ QLabel#footerIdentity { color: #9fb4c8; }
 QStatusBar::item { border: 0; }
 """
 
+PAGE_DASHBOARD = 0
+PAGE_CONFIGURATION = 1
+PAGE_INVENTORY = 2
+PAGE_REPORTS = 3
+PAGE_LOGS = 4
+PAGE_ASSISTANT = 5
+PAGE_RUN = 6
+PAGE_STATUS = 7
+PAGE_GUIDE = 8
+PAGE_ABOUT = 9
+
 
 class BarChartCard(QFrame):
     """Small dependency-free horizontal bar chart for local report metrics."""
@@ -204,6 +215,7 @@ class MainWindow(QMainWindow):
         self.pending_issue_update: tuple[str, dict[str, str]] | None = None
         self.config_editors: dict[Path, QPlainTextEdit] = {}
         self.report_paths: dict[int, Path] = {}
+        self.log_run_files: list[Path] = []
         self.developer_tools_active = services.developer_tools_enabled()
         self._build_interface()
         self.load_configuration()
@@ -225,7 +237,7 @@ class MainWindow(QMainWindow):
         self.navigation = QListWidget()
         self.navigation.setObjectName("navigation")
         self.navigation.addItems((
-            "Dashboard", "Configuration", "Inventory", "Reports",
+            "Dashboard", "Configuration", "Inventory", "Reports", "Logs",
             "AI issue assistant", "Run check", "System status", "User guide", "About",
         ))
         self.navigation.currentRowChanged.connect(self._page_selected)
@@ -249,6 +261,7 @@ class MainWindow(QMainWindow):
         self.pages.addWidget(self._configuration_page())
         self.pages.addWidget(self._inventory_page())
         self.pages.addWidget(self._reports_page())
+        self.pages.addWidget(self._logs_page())
         self.pages.addWidget(self._assistant_page())
         self.pages.addWidget(self._run_page())
         self.pages.addWidget(self._status_page())
@@ -337,7 +350,7 @@ class MainWindow(QMainWindow):
         refresh.clicked.connect(self.refresh_all)
         actions.addWidget(refresh)
         run = QPushButton("Open Run check")
-        run.clicked.connect(lambda: self.navigation.setCurrentRow(5))
+        run.clicked.connect(lambda: self.navigation.setCurrentRow(PAGE_RUN))
         actions.addWidget(run)
         actions.addStretch()
         layout.addLayout(actions)
@@ -750,6 +763,58 @@ class MainWindow(QMainWindow):
         layout.addWidget(reload_button, alignment=Qt.AlignmentFlag.AlignLeft)
         return page
 
+    def _logs_page(self) -> QWidget:
+        page, layout = self._page(
+            "Analysis logs",
+            "Browse private run archives by year and month. Logs remain under Git-ignored output/.",
+        )
+        splitter = QSplitter()
+        self.logs_tree = QTreeWidget()
+        self.logs_tree.setHeaderLabels(("Archive", "Status", "Coordinator"))
+        self.logs_tree.setMinimumWidth(300)
+        self.logs_tree.header().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        self.logs_tree.header().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        self.logs_tree.header().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        self.logs_tree.currentItemChanged.connect(self.select_analysis_log_run)
+        splitter.addWidget(self.logs_tree)
+
+        viewer_panel = QWidget()
+        viewer_layout = QVBoxLayout(viewer_panel)
+        viewer_layout.setContentsMargins(0, 0, 0, 0)
+        file_row = QHBoxLayout()
+        file_row.addWidget(QLabel("File"))
+        self.log_file_combo = QComboBox()
+        self.log_file_combo.setMinimumWidth(260)
+        self.log_file_combo.currentIndexChanged.connect(self.show_analysis_log_file)
+        file_row.addWidget(self.log_file_combo)
+        file_row.addStretch()
+        viewer_layout.addLayout(file_row)
+        self.analysis_log_viewer = QPlainTextEdit()
+        self.analysis_log_viewer.setReadOnly(True)
+        self.analysis_log_viewer.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
+        self.analysis_log_viewer.setPlaceholderText("Select an archived analysis run.")
+        viewer_layout.addWidget(self.analysis_log_viewer, 1)
+        splitter.addWidget(viewer_panel)
+        splitter.setStretchFactor(1, 1)
+        splitter.setSizes((340, 760))
+        layout.addWidget(splitter, 1)
+
+        actions = QHBoxLayout()
+        reload_button = QPushButton("Reload logs")
+        reload_button.setProperty("variant", "secondary")
+        reload_button.clicked.connect(self.load_analysis_logs)
+        actions.addWidget(reload_button)
+        self.delete_log_button = QPushButton("Delete selected run…")
+        self.delete_log_button.setProperty("variant", "danger")
+        self.delete_log_button.setEnabled(False)
+        self.delete_log_button.clicked.connect(self.delete_selected_analysis_run)
+        actions.addWidget(self.delete_log_button)
+        actions.addStretch()
+        self.analysis_log_count = QLabel()
+        actions.addWidget(self.analysis_log_count)
+        layout.addLayout(actions)
+        return page
+
     def _assistant_page(self) -> QWidget:
         page, layout = self._page(
             "AI issue assistant",
@@ -1004,13 +1069,15 @@ class MainWindow(QMainWindow):
     def _page_selected(self, row: int) -> None:
         if row >= 0:
             self.pages.setCurrentIndex(row)
-        if row == 2:
+        if row == PAGE_INVENTORY:
             self.load_inventory()
-        elif row == 3:
+        elif row == PAGE_REPORTS:
             self.load_reports()
-        elif row == 4:
+        elif row == PAGE_LOGS:
+            self.load_analysis_logs()
+        elif row == PAGE_ASSISTANT:
             self.load_assistant_issues()
-        elif row == 6:
+        elif row == PAGE_STATUS:
             self.load_status()
 
     def _search_guide(self, *, backward: bool) -> None:
@@ -1075,6 +1142,7 @@ class MainWindow(QMainWindow):
             "configuration": "Configuration",
             "technology-inventory": "Technology inventory",
             "reports-and-follow-up": "Reports and follow-up",
+            "analysis-logs": "Analysis logs",
             "ai-issue-assistant": "AI issue assistant",
             "running-security-checks": "Running security checks",
             "system-status-and-ai-authentication": "System status and AI authentication",
@@ -1099,6 +1167,7 @@ class MainWindow(QMainWindow):
     def refresh_all(self) -> None:
         self.load_inventory()
         self.load_reports()
+        self.load_analysis_logs()
         self.load_status()
         default_profile, profiles, default_mode, modes = services.ai_options()
         self.profile_combo.clear()
@@ -1395,6 +1464,104 @@ class MainWindow(QMainWindow):
         self.report_stack.setCurrentWidget(self.report_viewer)
         self.report_viewer.setMarkdown(path.read_text(encoding="utf-8", errors="replace"))
 
+    def load_analysis_logs(self) -> None:
+        current_path = None
+        current = self.logs_tree.currentItem()
+        if current:
+            current_path = current.data(0, Qt.ItemDataRole.UserRole)
+        self.logs_tree.blockSignals(True)
+        self.logs_tree.clear()
+        parents: dict[tuple[str, ...], QTreeWidgetItem] = {}
+        entries = services.analysis_run_entries()
+        selected_item = None
+        for entry in entries:
+            year_key = (str(entry["year"]),)
+            year_item = parents.get(year_key)
+            if year_item is None:
+                year_item = QTreeWidgetItem((year_key[0], "", ""))
+                year_item.setFlags(year_item.flags() & ~Qt.ItemFlag.ItemIsSelectable)
+                self.logs_tree.addTopLevelItem(year_item)
+                parents[year_key] = year_item
+            month_key = (year_key[0], str(entry["month"]))
+            month_item = parents.get(month_key)
+            if month_item is None:
+                month_item = QTreeWidgetItem((month_key[1], "", ""))
+                month_item.setFlags(month_item.flags() & ~Qt.ItemFlag.ItemIsSelectable)
+                year_item.addChild(month_item)
+                parents[month_key] = month_item
+            label = str(entry["started"]).replace("T", " ").replace("+00:00", "Z")
+            run_item = QTreeWidgetItem((label, str(entry["status"]), str(entry["coordinator"])))
+            run_item.setData(0, Qt.ItemDataRole.UserRole, str(entry["path"]))
+            month_item.addChild(run_item)
+            if current_path == str(entry["path"]):
+                selected_item = run_item
+            year_item.setExpanded(True)
+            month_item.setExpanded(True)
+        self.logs_tree.blockSignals(False)
+        self.analysis_log_count.setText(f"{len(entries)} archived run(s)")
+        if selected_item is not None:
+            self.logs_tree.setCurrentItem(selected_item)
+        elif entries:
+            first_year = self.logs_tree.topLevelItem(0)
+            self.logs_tree.setCurrentItem(first_year.child(0).child(0))
+        else:
+            self.log_run_files = []
+            self.log_file_combo.clear()
+            self.analysis_log_viewer.setPlainText("No analysis logs have been created yet.")
+            self.delete_log_button.setEnabled(False)
+
+    def select_analysis_log_run(
+        self, current: QTreeWidgetItem | None, _previous: QTreeWidgetItem | None,
+    ) -> None:
+        path_text = current.data(0, Qt.ItemDataRole.UserRole) if current else None
+        self.delete_log_button.setEnabled(bool(path_text))
+        self.log_file_combo.blockSignals(True)
+        self.log_file_combo.clear()
+        self.log_run_files = []
+        if path_text:
+            try:
+                self.log_run_files = services.analysis_run_files(Path(str(path_text)))
+            except (OSError, services.ConfigurationError) as error:
+                self.analysis_log_viewer.setPlainText(str(error))
+            else:
+                self.log_file_combo.addItems([path.name for path in self.log_run_files])
+        self.log_file_combo.blockSignals(False)
+        if self.log_run_files:
+            self.log_file_combo.setCurrentIndex(0)
+            self.show_analysis_log_file(0)
+        elif path_text:
+            self.analysis_log_viewer.setPlainText("This run contains no readable log files.")
+
+    def show_analysis_log_file(self, index: int) -> None:
+        if not 0 <= index < len(self.log_run_files):
+            return
+        try:
+            content = services.read_analysis_run_file(self.log_run_files[index])
+        except (OSError, services.ConfigurationError) as error:
+            content = str(error)
+        self.analysis_log_viewer.setPlainText(content)
+
+    def delete_selected_analysis_run(self) -> None:
+        item = self.logs_tree.currentItem()
+        path_text = item.data(0, Qt.ItemDataRole.UserRole) if item else None
+        if not path_text:
+            return
+        run_id = Path(str(path_text)).name
+        if QMessageBox.question(
+            self, "Delete analysis log",
+            f"Permanently delete the complete local log archive for {run_id}?\n\n"
+            "This removes its summary, event log, routing plan, AI output, and evidence dossiers. "
+            "Reports and scanned projects are not affected.",
+        ) != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            removed = services.delete_analysis_run(Path(str(path_text)))
+        except (OSError, services.ConfigurationError) as error:
+            QMessageBox.critical(self, "Unable to delete analysis log", str(error))
+            return
+        self.load_analysis_logs()
+        self.statusBar().showMessage(f"Deleted analysis log {removed}", 10000)
+
     def load_followup_table(self, path: Path | None = None) -> None:
         activities = services.followup_activities(path)
         self.followup_table.setRowCount(len(activities))
@@ -1527,7 +1694,7 @@ class MainWindow(QMainWindow):
         )
 
     def open_followup_ai_chat(self, issue_id: str) -> None:
-        self.navigation.setCurrentRow(4)
+        self.navigation.setCurrentRow(PAGE_ASSISTANT)
         for index in range(self.assistant_issue_combo.count()):
             issue = self.assistant_issue_combo.itemData(index, Qt.ItemDataRole.UserRole)
             if isinstance(issue, dict) and issue.get("ID") == issue_id:
@@ -1984,9 +2151,32 @@ class MainWindow(QMainWindow):
         provider = self.provider_combo.currentText()
         profile = self.profile_combo.currentText()
         mode = self.mode_combo.currentText()
+        try:
+            routing = services.analysis_routing(provider)
+            models = {
+                name: services.ai_model(name, profile)
+                for name in routing["required_providers"]
+            }
+        except (ValueError, services.ConfigurationError) as error:
+            QMessageBox.critical(self, "Unable to build analysis plan", str(error))
+            return
+        if not routing["selected"]:
+            QMessageBox.warning(
+                self, "No projects selected",
+                "Select at least one project in Technology inventory before running analysis.",
+            )
+            return
+        model_summary = ", ".join(
+            f"{name}: {models[name]}" for name in routing["required_providers"]
+        )
         if QMessageBox.question(
             self, "Start AI analysis",
-            f"Start the complete {provider} check with profile {profile} in {mode} mode?\n\n"
+            f"Start routed analysis with {provider} as coordinator, profile {profile}, "
+            f"and {mode} mode?\n\n"
+            f"Projects — {routing['summary']}\n"
+            f"Models — {model_summary}\n\n"
+            "Projects with '-' use the coordinator. Preferred Codex/Claude projects "
+            "use that provider.\n\n"
             "The agent may access the network and update ignored local output files.",
         ) != QMessageBox.StandardButton.Yes:
             return
@@ -2007,7 +2197,7 @@ class MainWindow(QMainWindow):
             action, provider=provider, profile=profile, mode=mode,
             assume_yes=assume_yes, non_interactive=non_interactive,
         )
-        self.navigation.setCurrentRow(5)
+        self.navigation.setCurrentRow(PAGE_RUN)
         self.log.appendPlainText(f"\n$ {shlex.join(command)}\n")
         self.stop_button.setEnabled(True)
         self.statusBar().showMessage(f"Running {action}…")

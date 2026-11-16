@@ -4,11 +4,23 @@
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
+import stat
 
-from scripts.ai_usage import append_usage_record, load_usage_records, summarize_usage, usage_from_event
+from scripts.ai_usage import (
+    append_cli_diagnostic, append_usage_record, load_usage_records, summarize_usage,
+    usage_from_event,
+)
 
 
 class AIUsageTest(unittest.TestCase):
+    def test_cli_diagnostic_is_retained_in_private_event_log(self) -> None:
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "run.log"
+            append_cli_diagnostic(path, "codex", "error: invalid option")
+
+            self.assertIn("CLI codex: error: invalid option", path.read_text(encoding="utf-8"))
+            self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
+
     def test_claude_result_fields_are_normalized(self) -> None:
         usage = usage_from_event("claude", {
             "usage": {

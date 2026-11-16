@@ -12,15 +12,74 @@ from unittest.mock import patch
 import yaml
 
 from desktop.services import (
-    ConfigurationError, agent_authentication, agent_usage_status, assistant_command,
+    ConfigurationError, agent_authentication, agent_usage_status, analysis_routing,
+    analysis_run_entries, analysis_run_files, assistant_command, delete_analysis_run,
     extract_issue_update, project_metadata,
     followup_source_links, proposal_changes, security_statistics, update_followup_activity,
-    restore_factory_configuration, validate_config_text, write_config_text,
+    read_analysis_run_file, restore_factory_configuration, validate_config_text,
+    write_config_text,
     update_inventory_preferences,
 )
 
 
 class DesktopConfigurationServicesTest(unittest.TestCase):
+    def test_analysis_logs_are_archived_read_and_deleted_as_one_safe_run(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory) / "analysis-runs"
+            run = root / "2026/11/20261116T180000Z-42"
+            run.mkdir(parents=True)
+            (run / "run-summary.txt").write_text(
+                "Run ID: 20261116T180000Z-42\nStatus: completed\n"
+                "Started UTC: 2026-11-16T18:00:00Z\nCoordinator: codex\n",
+                encoding="utf-8",
+            )
+            (run / "run.log").write_text("START\nFINISH\n", encoding="utf-8")
+            with patch("desktop.services.ANALYSIS_RUNS_DIR", root):
+                entries = analysis_run_entries()
+                files = analysis_run_files(run)
+                content = read_analysis_run_file(run / "run.log")
+                removed = delete_analysis_run(run)
+
+            self.assertEqual(len(entries), 1)
+            self.assertEqual(entries[0]["year"], "2026")
+            self.assertEqual(entries[0]["month"], "11")
+            self.assertEqual(entries[0]["status"], "completed")
+            self.assertEqual([path.name for path in files], ["run-summary.txt", "run.log"])
+            self.assertEqual(content, "START\nFINISH\n")
+            self.assertEqual(removed, "20261116T180000Z-42")
+            self.assertFalse(run.exists())
+
+    def test_analysis_log_deletion_rejects_directories_outside_archive(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory) / "analysis-runs"
+            outside = Path(directory) / "outside"
+            root.mkdir()
+            outside.mkdir()
+            (outside / "run-summary.txt").write_text("Status: completed\n", encoding="utf-8")
+            with patch("desktop.services.ANALYSIS_RUNS_DIR", root):
+                with self.assertRaises(ConfigurationError):
+                    delete_analysis_run(outside)
+
+    def test_analysis_routing_returns_counts_without_local_paths(self) -> None:
+        config = {"inventory": {"projects": [
+            {"id": "api", "path": "/private/api"},
+            {"id": "web", "path": "/private/web", "advisory_checks": {
+                "enabled": True, "preferred_ai": "claude",
+            }},
+            {"id": "off", "path": "/private/off", "advisory_checks": {
+                "enabled": False, "preferred_ai": None,
+            }},
+        ]}}
+        with patch("desktop.services.effective_config_path"), patch(
+            "desktop.services.load_yaml", return_value=config,
+        ):
+            routing = analysis_routing("codex")
+
+        self.assertEqual(routing["groups"], {"codex": 1, "claude": 1})
+        self.assertEqual(routing["excluded"], 1)
+        self.assertEqual(routing["required_providers"], ["codex", "claude"])
+        self.assertNotIn("/private", repr(routing))
+
     def test_inventory_preferences_are_written_only_to_local_configuration(self) -> None:
         with TemporaryDirectory() as directory:
             path = Path(directory) / "projects.yaml"
@@ -99,6 +158,7 @@ class DesktopConfigurationServicesTest(unittest.TestCase):
         self.assertIn("read-only", command)
         self.assertIn("never", command)
         self.assertNotIn("--approve-for-me", command)
+        self.assertLess(command.index("--ask-for-approval"), command.index("exec"))
 
     def test_project_metadata_is_loaded_from_the_version_file(self) -> None:
         metadata = project_metadata()

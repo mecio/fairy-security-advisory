@@ -30,6 +30,7 @@ from scripts.config_backup import (
     inspect_configuration_backup, latest_configuration_backup,
 )
 from scripts.ai_usage import codex_rate_limits, summarize_usage
+from scripts.analysis_plan import build_analysis_plan, plan_summary, required_providers
 from scripts.desktop_integration import (
     desktop_entry_installed, install_linux_desktop_entry, integration_paths,
     remove_linux_desktop_entry,
@@ -43,6 +44,7 @@ LOCAL_CONFIG_DIR = CONFIG_DIR / "local"
 LOCAL_CONFIG = LOCAL_CONFIG_DIR / "projects.yaml"
 LOCAL_APPLICATION_CONFIG = LOCAL_CONFIG_DIR / "application.yaml"
 EXAMPLE_CONFIG = CONFIG_DIR / "projects.example.yaml"
+ANALYSIS_RUNS_DIR = ROOT / "output/analysis-runs"
 CONFIG_FILES: tuple[tuple[str, Path], ...] = tuple(
     (title, LOCAL_CONFIG_DIR / local_name)
     for title, _factory_name, local_name in CONFIG_SPECS
@@ -180,6 +182,124 @@ def update_inventory_preferences(preferences: dict[str, dict[str, Any]]) -> None
             "preferred_ai": preferred_ai or None,
         }
     write_config_text(config_path, dump_config_data(data), private=True)
+
+
+def analysis_routing(default_provider: str) -> dict[str, Any]:
+    """Return the effective local routing plan without exposing project paths."""
+    plan = build_analysis_plan(
+        load_yaml(effective_config_path(CONFIG_DIR, "projects.example.yaml")),
+        default_provider,
+    )
+    return {
+        "summary": plan_summary(plan),
+        "groups": {
+            provider: len(projects)
+            for provider, projects in plan["groups"].items()
+        },
+        "excluded": plan["excluded_count"],
+        "selected": plan["selected_count"],
+        "required_providers": required_providers(plan),
+    }
+
+
+def _summary_fields(path: Path) -> dict[str, str]:
+    fields: dict[str, str] = {}
+    if not path.is_file():
+        return fields
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        key, separator, value = line.partition(":")
+        if separator and key.strip():
+            fields[key.strip()] = value.strip()
+    return fields
+
+
+def _safe_analysis_run_directory(path: Path) -> Path:
+    root = ANALYSIS_RUNS_DIR.resolve()
+    resolved = path.resolve()
+    if resolved == root or root not in resolved.parents:
+        raise ConfigurationError("The selected log is outside output/analysis-runs.")
+    if path.is_symlink() or not path.is_dir():
+        raise ConfigurationError("The selected analysis run is not a regular directory.")
+    if not ((path / "run-summary.txt").is_file() or (path / "plan.json").is_file()):
+        raise ConfigurationError("The selected directory is not an analysis run.")
+    return resolved
+
+
+def analysis_run_entries() -> list[dict[str, Any]]:
+    """List local run archives newest first, including legacy flat directories."""
+    if not ANALYSIS_RUNS_DIR.is_dir():
+        return []
+    directories = {
+        path.parent for path in ANALYSIS_RUNS_DIR.rglob("run-summary.txt")
+        if path.is_file() and not path.is_symlink()
+    } | {
+        path.parent for path in ANALYSIS_RUNS_DIR.rglob("plan.json")
+        if path.is_file() and not path.is_symlink()
+    }
+    entries: list[dict[str, Any]] = []
+    for directory in directories:
+        try:
+            safe = _safe_analysis_run_directory(directory)
+        except ConfigurationError:
+            continue
+        fields = _summary_fields(safe / "run-summary.txt")
+        started = fields.get("Started UTC", "")
+        match = re.match(r"(\d{4})-(\d{2})", started)
+        if match:
+            year, month = match.groups()
+        else:
+            name_match = re.match(r"(\d{4})(\d{2})", safe.name)
+            year, month = name_match.groups() if name_match else ("Unknown", "Unknown")
+        entries.append({
+            "path": safe,
+            "run_id": fields.get("Run ID", safe.name),
+            "year": year,
+            "month": month,
+            "started": started or safe.name,
+            "status": fields.get("Status", "unknown"),
+            "coordinator": fields.get("Coordinator", "unknown"),
+        })
+    return sorted(entries, key=lambda item: (item["started"], item["run_id"]), reverse=True)
+
+
+def analysis_run_files(directory: Path) -> list[Path]:
+    safe = _safe_analysis_run_directory(directory)
+    preferred = {
+        "run-summary.txt": 0, "run.log": 1, "coordinator-output.md": 2,
+        "plan.json": 3,
+    }
+    files = [
+        path for path in safe.iterdir()
+        if path.is_file() and not path.is_symlink()
+        and path.suffix.casefold() in {".txt", ".log", ".md", ".json"}
+    ]
+    return sorted(files, key=lambda path: (preferred.get(path.name, 10), path.name.casefold()))
+
+
+def read_analysis_run_file(path: Path) -> str:
+    safe_directory = _safe_analysis_run_directory(path.parent)
+    resolved = path.resolve()
+    if resolved.parent != safe_directory or path.is_symlink() or not path.is_file():
+        raise ConfigurationError("The selected log file is invalid.")
+    if path.stat().st_size > 10 * 1024 * 1024:
+        raise ConfigurationError("The selected log file exceeds the 10 MiB viewer limit.")
+    return path.read_text(encoding="utf-8", errors="replace")
+
+
+def delete_analysis_run(directory: Path) -> str:
+    """Permanently remove exactly one validated local analysis-run directory."""
+    safe = _safe_analysis_run_directory(directory)
+    run_id = safe.name
+    shutil.rmtree(safe)
+    root = ANALYSIS_RUNS_DIR.resolve()
+    parent = safe.parent
+    while parent != root and root in parent.parents:
+        try:
+            parent.rmdir()
+        except OSError:
+            break
+        parent = parent.parent
+    return run_id
 
 
 def inventory_age() -> str:
@@ -537,8 +657,8 @@ def assistant_command(provider: str, profile: str, prompt: str) -> list[str]:
     model = ai_model(provider, profile)
     if provider == "codex":
         return [
-            executable, "--search", "exec", "--model", model,
-            "--sandbox", "read-only", "--ask-for-approval", "never", prompt,
+            executable, "--search", "--ask-for-approval", "never",
+            "exec", "--model", model, "--sandbox", "read-only", prompt,
         ]
     if provider == "claude":
         return [

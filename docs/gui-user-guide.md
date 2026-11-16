@@ -19,6 +19,7 @@ remain in Git-ignored local directories.
 - [Configuration](#configuration)
 - [Technology inventory](#technology-inventory)
 - [Reports and follow-up](#reports-and-follow-up)
+- [Analysis logs](#analysis-logs)
 - [AI issue assistant](#ai-issue-assistant)
 - [Running security checks](#running-security-checks)
 - [System status and AI authentication](#system-status-and-ai-authentication)
@@ -304,11 +305,11 @@ correlation, manifest and lockfile inspection, OSV-Scanner and Trivy targets,
 new findings, and new follow-up activities. It remains visible and refreshable
 in the inventory so that it can be selected again later.
 
-**Preferred AI** accepts **-**, **Codex**, or **Claude**. The default **-** means
-that no per-project provider preference is specified. Codex and Claude are soft
-routing preferences: they do not install or start another agent automatically,
-and the provider selected for a complete analysis remains authoritative. Click
-**Save project choices** to write these choices to ignored local configuration.
+**Preferred AI** accepts **-**, **Codex**, or **Claude**. The default **-** uses
+the coordinator selected in Run check. An explicit Codex or Claude choice
+routes that project to the matching CLI and to that provider's model in the
+selected profile. Click **Save project choices** to write these choices to
+ignored local configuration.
 
 The inventory can include languages and versions, frameworks, runtimes,
 package manifests, lockfiles, databases, web servers, reverse proxies,
@@ -375,6 +376,21 @@ Activities that still require work or verification remain in active follow-up
 and are repeated in later daily reports. Closed rows are catalogued under
 `Archive · YYYY / MM`, keeping the current table manageable without losing
 historical evidence.
+
+## Analysis logs
+
+The **Logs** page presents completed and failed analysis runs as an archive tree
+organized by year, month, and run. New runs are stored physically below
+`output/analysis-runs/YYYY/MM/<run-id>/`; legacy flat run directories remain
+readable. Selecting a run opens `run-summary.txt` first. Use the file selector
+to inspect its chronological `run.log`, routing `plan.json`, coordinator output,
+and provider evidence dossiers.
+
+**Delete selected run…** permanently removes only the selected run directory
+after confirmation. This includes its summary, log, plan, coordinator output,
+and evidence dossiers. It does not remove daily reports, follow-up activities,
+configuration, or scanned projects. Empty year and month directories are
+cleaned up automatically. Log archives remain local and Git-ignored.
 
 ## AI issue assistant
 
@@ -455,6 +471,25 @@ refreshes stale inventory when confirmed, checks prerequisites, and tests source
 reachability. The agent is started from the fAIry project root so it receives
 the project instructions, skill, effective local configuration, inventory,
 reports, and follow-up context.
+
+The selected agent is the **coordinator**. Projects with **-** use that agent;
+projects explicitly assigned to Codex or Claude use the corresponding CLI and
+the matching model in the selected profile. The confirmation dialog shows the
+project count for each provider, excluded projects, and models before anything
+starts. Every required CLI must be installed and authenticated.
+
+An additional provider runs first in read-only evidence mode and stores its
+private dossier under `output/analysis-runs/`. It cannot update canonical
+reports or run scanners. The coordinator analyzes its own group, consumes and
+verifies those dossiers, deduplicates findings, and performs the only canonical
+report update. A failed evidence phase stops the run before consolidation.
+
+Every started run has a private audit directory below `output/analysis-runs/`.
+Open `run-summary.txt` for a simple one-field-per-line overview of who ran the
+analysis, which AI providers and models were used, project counts, timestamps,
+phase outcomes, and exit code. `run.log` contains chronological phase events;
+`coordinator-output.md` retains the coordinator's final visible response.
+Credentials and provider account e-mail addresses are not logged.
 
 The complete workflow asks the agent to:
 

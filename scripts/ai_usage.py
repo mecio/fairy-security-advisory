@@ -67,8 +67,25 @@ def append_usage_record(record: dict[str, Any], path: Path = USAGE_FILE) -> None
     path.chmod(0o600)
 
 
+def append_cli_diagnostic(path: Path, provider: str, message: str) -> None:
+    """Retain concise CLI errors in the private run event log."""
+    cleaned = message.strip()
+    if not cleaned:
+        return
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    path.parent.chmod(0o700)
+    line = f"{dt.datetime.now(dt.timezone.utc).isoformat().replace('+00:00', 'Z')} CLI {provider}: {cleaned[:4000]}\n"
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+    try:
+        os.write(descriptor, line.encode("utf-8"))
+    finally:
+        os.close(descriptor)
+    path.chmod(0o600)
+
+
 def run_tracked_command(
     command: list[str], provider: str, *, model: str, profile: str, execution_mode: str,
+    capture_path: Path | None = None, event_log_path: Path | None = None,
 ) -> int:
     """Stream a structured CLI run while retaining only aggregate local usage."""
     started = time.monotonic()
@@ -76,6 +93,7 @@ def run_tracked_command(
         "input_tokens": 0, "output_tokens": 0, "cached_input_tokens": 0,
         "cache_creation_input_tokens": 0, "cost_usd": 0.0,
     }
+    visible_messages: list[str] = []
     process = subprocess.Popen(
         command, cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         text=True, encoding="utf-8", errors="replace", bufsize=1,
@@ -86,9 +104,16 @@ def run_tracked_command(
             event = json.loads(line)
         except json.JSONDecodeError:
             print(line, end="", flush=True)
+            if event_log_path is not None:
+                append_cli_diagnostic(event_log_path, provider, line)
             continue
         if not isinstance(event, dict):
             continue
+        if event_log_path is not None and str(event.get("type", "")).casefold() in {
+            "error", "failed", "failure",
+        }:
+            detail = event.get("message") or event.get("error") or event
+            append_cli_diagnostic(event_log_path, provider, str(detail))
         usage = usage_from_event(provider, event)
         # Final result events contain cumulative totals, so retain the maximum
         # rather than summing repeated snapshots.
@@ -96,8 +121,20 @@ def run_tracked_command(
             totals[key] = max(totals.get(key, 0), value)
         visible = _visible_event_text(provider, event)
         if visible:
+            visible_messages.append(visible)
             print(visible, flush=True)
     exit_code = process.wait()
+    if capture_path is not None and exit_code == 0:
+        capture_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        capture_path.parent.chmod(0o700)
+        temporary = capture_path.with_name(f".{capture_path.name}.{os.getpid()}.tmp")
+        try:
+            temporary.write_text("\n\n".join(visible_messages).strip() + "\n", encoding="utf-8")
+            temporary.chmod(0o600)
+            os.replace(temporary, capture_path)
+            capture_path.chmod(0o600)
+        finally:
+            temporary.unlink(missing_ok=True)
     append_usage_record({
         "timestamp": dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z"),
         "provider": provider,

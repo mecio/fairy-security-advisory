@@ -26,6 +26,74 @@ except ImportError:
 
 @unittest.skipUnless(QApplication is not None, "optional PySide6 dependency is not installed")
 class DesktopWindowTest(unittest.TestCase):
+    def test_logs_page_reads_archives_and_deletes_only_selected_run(self) -> None:
+        application = QApplication.instance() or QApplication([])
+        with TemporaryDirectory() as directory:
+            root = Path(directory) / "analysis-runs"
+            run = root / "2026/11/20261116T180000Z-42"
+            run.mkdir(parents=True)
+            (run / "run-summary.txt").write_text(
+                "Run ID: 20261116T180000Z-42\nStatus: completed\n"
+                "Started UTC: 2026-11-16T18:00:00Z\nCoordinator: codex\n",
+                encoding="utf-8",
+            )
+            (run / "run.log").write_text("START\nFINISH\n", encoding="utf-8")
+            with patch("desktop.services.ANALYSIS_RUNS_DIR", root):
+                window = MainWindow()
+                window.navigation.setCurrentRow(4)
+                application.processEvents()
+                run_item = window.logs_tree.topLevelItem(0).child(0).child(0)
+                window.logs_tree.setCurrentItem(run_item)
+                application.processEvents()
+                self.assertIn("Run ID: 20261116T180000Z-42", window.analysis_log_viewer.toPlainText())
+                self.assertTrue(window.delete_log_button.isEnabled())
+                with patch(
+                    "desktop.main_window.QMessageBox.question",
+                    return_value=QMessageBox.StandardButton.Yes,
+                ):
+                    window.delete_selected_analysis_run()
+                self.assertFalse(run.exists())
+                self.assertEqual(window.logs_tree.topLevelItemCount(), 0)
+                window.close()
+                window.deleteLater()
+                application.processEvents()
+
+    def test_complete_analysis_uses_routing_plan_and_selected_profile(self) -> None:
+        application = QApplication.instance() or QApplication([])
+        window = MainWindow()
+        window.provider_combo.setCurrentText("codex")
+        window.profile_combo.setCurrentText("balanced")
+        window.mode_combo.setCurrentText("economical")
+        routing = {
+            "summary": "Codex: 2 project(s); Claude: 1 project(s); excluded: 1",
+            "groups": {"codex": 2, "claude": 1},
+            "excluded": 1,
+            "selected": 3,
+            "required_providers": ["codex", "claude"],
+        }
+        with patch(
+            "desktop.main_window.services.analysis_routing", return_value=routing,
+        ), patch(
+            "desktop.main_window.services.ai_model",
+            side_effect=lambda provider, _profile: f"{provider}-model",
+        ), patch(
+            "desktop.main_window.QMessageBox.question",
+            return_value=QMessageBox.StandardButton.Yes,
+        ) as question, patch.object(window, "start_action") as start:
+            window.run_ai_analysis()
+
+        message = question.call_args.args[2]
+        self.assertIn(routing["summary"], message)
+        self.assertIn("codex: codex-model", message)
+        self.assertIn("claude: claude-model", message)
+        start.assert_called_once_with(
+            "ai-check", provider="codex", profile="balanced", mode="economical",
+            assume_yes=True, non_interactive=True,
+        )
+        window.close()
+        window.deleteLater()
+        application.processEvents()
+
     def test_inventory_supports_project_selection_and_preferred_ai(self) -> None:
         application = QApplication.instance() or QApplication([])
         with patch("desktop.main_window.services.inventory_projects", return_value=[{
@@ -80,7 +148,14 @@ class DesktopWindowTest(unittest.TestCase):
         window.show()
         application.processEvents()
 
-        self.assertEqual(window.pages.count(), 9)
+        self.assertEqual(window.pages.count(), 10)
+        self.assertEqual(
+            [window.navigation.item(index).text() for index in range(window.navigation.count())],
+            [
+                "Dashboard", "Configuration", "Inventory", "Reports", "Logs",
+                "AI issue assistant", "Run check", "System status", "User guide", "About",
+            ],
+        )
         self.assertEqual(
             [window.config_tabs.tabText(index) for index in range(window.config_tabs.count())],
             [
@@ -129,7 +204,7 @@ class DesktopWindowTest(unittest.TestCase):
             "configuration backups",
             window.guide_viewer.textCursor().selectedText().casefold(),
         )
-        window.navigation.setCurrentRow(7)
+        window.navigation.setCurrentRow(8)
         application.processEvents()
         window.open_guide_link(QUrl("#configuration-backups"))
         application.processEvents()
