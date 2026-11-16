@@ -22,7 +22,7 @@ from PySide6.QtGui import QIcon  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from desktop import services  # noqa: E402
-from desktop.main_window import MainWindow  # noqa: E402
+from desktop.main_window import MainWindow, PAGE_DASHBOARD, PAGE_REPORTS  # noqa: E402
 
 ASSETS = ROOT / "docs/assets"
 
@@ -136,11 +136,11 @@ def render() -> tuple[Path, Path]:
             window.resize(1440, 900)
             window.show()
             application.processEvents()
-            window.navigation.setCurrentRow(0)
+            window._navigate_to_page(PAGE_DASHBOARD)
             application.processEvents()
             if not window.grab().save(str(dashboard_path)):
                 raise RuntimeError(f"Unable to save {dashboard_path}")
-            window.navigation.setCurrentRow(3)
+            window._navigate_to_page(PAGE_REPORTS)
             window.report_list.setCurrentRow(0)
             application.processEvents()
             if not window.grab().save(str(followup_path)):

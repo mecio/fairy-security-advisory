@@ -478,6 +478,10 @@ the matching model in the selected profile. The confirmation dialog shows the
 project count for each provider, excluded projects, and models before anything
 starts. Every required CLI must be installed and authenticated.
 
+The Run check page keeps this routing rule visible below the agent selectors so
+changing the coordinator is not mistaken for overriding explicit per-project
+Inventory preferences.
+
 An additional provider runs first in read-only evidence mode and stores its
 private dossier under `output/analysis-runs/`. It cannot update canonical
 reports or run scanners. The coordinator analyzes its own group, consumes and
@@ -490,6 +494,11 @@ analysis, which AI providers and models were used, project counts, timestamps,
 phase outcomes, and exit code. `run.log` contains chronological phase events;
 `coordinator-output.md` retains the coordinator's final visible response.
 Credentials and provider account e-mail addresses are not logged.
+
+When the application is started from an IDE agent terminal, fAIry removes only
+the transient parent Codex session and sandbox variables from child AI
+processes. It keeps normal account authentication and user configuration. This
+prevents the standalone CLI from being mistaken for a nested IDE tool call.
 
 The complete workflow asks the agent to:
 
@@ -526,6 +535,12 @@ cluttering the log. A successful process exit indicates that the command
 completed, not that every advisory was resolved; review the report's limitations
 and incomplete controls. **Clear log** removes only the visible process text
 from the widget.
+
+After the coordinator exits, fAIry verifies the result independently. The daily
+report and current summary must have changed, and the follow-up register must be
+present and non-empty. If these checks fail, the run is marked failed with exit
+code 2 even when the AI CLI itself returned zero. The private event log records
+the exact output-validation reason.
 
 **Stop** first requests graceful process termination. If the process does not
 exit promptly, the desktop application may force it to stop. A stopped run can

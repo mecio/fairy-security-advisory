@@ -495,11 +495,21 @@ The desktop **Logs** page browses these archives and can permanently delete one
 confirmed run at a time without affecting reports, follow-up, configuration, or
 scanned projects. Empty archive folders are removed automatically.
 
+Agent processes are detached from transient Codex IDE/session variables before
+launch. This lets a standalone Codex CLI create its own least-privilege sandbox
+even when fAIry was opened from an IDE-integrated agent terminal. Authentication
+and the user's normal Codex configuration are preserved.
+
 While an analysis is running, the desktop footer remains visible on every page
 and identifies the active provider and phase. The Run check page also shows
 elapsed time and completed projects. Progress advances only at verified
 provider-group boundaries because Codex and Claude do not expose a dependable
 per-project percentage while a single CLI request is running.
+
+A zero agent exit code is not sufficient for success: fAIry also verifies that
+the daily report and current summary changed and that the follow-up register is
+present and non-empty. A coordinator that could not access the repository or
+publish its results is recorded as a failed run with exit code 2.
 
 The Python scripts deterministically build the inventory and routing plan,
 validate prerequisites, isolate evidence, and coordinate provider execution.

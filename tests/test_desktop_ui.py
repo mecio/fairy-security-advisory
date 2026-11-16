@@ -12,13 +12,14 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 try:
     from PySide6.QtCore import QUrl
     from PySide6.QtCore import Qt
-    from PySide6.QtWidgets import QApplication, QComboBox, QMessageBox, QPushButton
+    from PySide6.QtWidgets import QApplication, QComboBox, QLabel, QMessageBox, QPushButton
     from desktop import services
     from desktop.main_window import BarChartCard, MainWindow
 except ImportError:
     QApplication = None
     BarChartCard = None
     MainWindow = None
+    QLabel = None
     QPushButton = None
     QUrl = None
     Qt = None
@@ -183,12 +184,22 @@ class DesktopWindowTest(unittest.TestCase):
 
         self.assertEqual(window.pages.count(), 10)
         self.assertEqual(
-            [window.navigation.item(index).text() for index in range(window.navigation.count())],
             [
-                "Dashboard", "Configuration", "Inventory", "Reports", "Logs",
-                "AI issue assistant", "Run check", "System status", "User guide", "About",
+                window.navigation.item(index).text()
+                for index in range(window.navigation.count())
+                if window.navigation.item(index).flags() & Qt.ItemFlag.ItemIsSelectable
+            ],
+            [
+                "Dashboard", "Reports", "AI issue assistant", "Run check", "Logs",
+                "Inventory", "Configuration", "System status", "User guide", "About",
             ],
         )
+        separators = [
+            window.navigation.item(index)
+            for index in range(window.navigation.count())
+            if not window.navigation.item(index).flags() & Qt.ItemFlag.ItemIsSelectable
+        ]
+        self.assertEqual(len(separators), 2)
         self.assertEqual(
             [window.config_tabs.tabText(index) for index in range(window.config_tabs.count())],
             [
@@ -199,6 +210,10 @@ class DesktopWindowTest(unittest.TestCase):
         self.assertGreater(window.inventory_tree.topLevelItemCount(), 0)
         self.assertGreater(window.report_list.count(), 0)
         self.assertEqual(window.status_table.columnCount(), 4)
+        self.assertIn(
+            "applies only to Inventory projects whose AI preference is ‘-’",
+            window.findChild(QLabel, "routingNotice").text(),
+        )
         optional_rows = {
             window.status_table.item(row, 0).text(): row
             for row in range(window.status_table.rowCount())
@@ -237,7 +252,7 @@ class DesktopWindowTest(unittest.TestCase):
             "configuration backups",
             window.guide_viewer.textCursor().selectedText().casefold(),
         )
-        window.navigation.setCurrentRow(8)
+        window._navigate_to_page(8)
         application.processEvents()
         window.open_guide_link(QUrl("#configuration-backups"))
         application.processEvents()

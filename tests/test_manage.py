@@ -10,11 +10,35 @@ from unittest.mock import patch
 from scripts.manage import (
     ANALYSIS_PROGRESS_PREFIX, ai_command, analysis_prompt, emit_analysis_progress,
     render_cli_banner, run_ai_check,
-    scoped_evidence_prompt, source_request,
+    scoped_evidence_prompt, source_request, validate_canonical_report_updates,
 )
 
 
 class AdvisorySourceRequestTest(unittest.TestCase):
+    def test_canonical_output_validation_rejects_unchanged_reports(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            paths = {
+                "daily report": root / "daily.md",
+                "summary": root / "summary.md",
+                "follow-up": root / "followup.md",
+            }
+            for path in paths.values():
+                path.write_text("existing\n", encoding="utf-8")
+            before = {
+                name: "different" if name == "follow-up" else None
+                for name in paths
+            }
+            # Daily and summary exist, but their signatures match the recorded state.
+            from scripts.manage import report_signature
+            before["daily report"] = report_signature(paths["daily report"])
+            before["summary"] = report_signature(paths["summary"])
+
+            valid, detail = validate_canonical_report_updates(paths, before)
+
+        self.assertFalse(valid)
+        self.assertIn("not updated: daily report, summary", detail)
+
     @patch.dict("os.environ", {"FAIRY_GUI_PROGRESS": "1"})
     @patch("builtins.print")
     def test_analysis_progress_event_is_machine_readable(self, output) -> None:
@@ -153,28 +177,45 @@ class AdvisorySourceRequestTest(unittest.TestCase):
         ]}}
         command.side_effect = lambda provider, *_args, **_kwargs: [provider, "run"]
 
-        def tracked(_command, _provider, **kwargs):
+        canonical_paths: dict[str, Path] = {}
+
+        def tracked(_command, provider, **kwargs):
             capture = kwargs.get("capture_path")
             if capture:
                 capture.parent.mkdir(parents=True, exist_ok=True)
                 capture.write_text("# Evidence\n", encoding="utf-8")
+            if provider == "codex":
+                for name, path in canonical_paths.items():
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_text(f"# Updated {name}\n", encoding="utf-8")
             return 0
 
-        with TemporaryDirectory() as directory, patch(
-            "scripts.manage.ROOT", Path(directory),
-        ), patch("scripts.manage.safe_load_yaml", return_value=config), patch(
-            "scripts.manage.run_tracked_command", side_effect=tracked,
-        ) as run:
-            result = run_ai_check(
-                "codex", "balanced", "economical", assume_yes=True,
-                non_interactive=True,
-            )
-            summaries = list((Path(directory) / "output/analysis-runs").rglob("run-summary.txt"))
-            self.assertEqual(len(summaries), 1)
-            run_directory = summaries[0].parent
-            summary = summaries[0].read_text(encoding="utf-8")
-            event_log = (run_directory / "run.log").read_text(encoding="utf-8")
-            self.assertTrue((run_directory / "coordinator-output.md").is_file())
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            canonical_paths.update({
+                "daily report": root / "output/daily-advisory-check/2026-11-16.md",
+                "summary": root / "output/check-summary.md",
+                "follow-up": root / "output/followup.md",
+            })
+            with patch(
+                "scripts.manage.ROOT", root,
+            ), patch(
+                "scripts.manage.canonical_report_paths", return_value=canonical_paths,
+            ), patch(
+                "scripts.manage.safe_load_yaml", return_value=config,
+            ), patch(
+                "scripts.manage.run_tracked_command", side_effect=tracked,
+            ) as run:
+                result = run_ai_check(
+                    "codex", "balanced", "economical", assume_yes=True,
+                    non_interactive=True,
+                )
+                summaries = list((root / "output/analysis-runs").rglob("run-summary.txt"))
+                self.assertEqual(len(summaries), 1)
+                run_directory = summaries[0].parent
+                summary = summaries[0].read_text(encoding="utf-8")
+                event_log = (run_directory / "run.log").read_text(encoding="utf-8")
+                self.assertTrue((run_directory / "coordinator-output.md").is_file())
 
         self.assertEqual(result, 0)
         self.assertIn("Status: completed", summary)
@@ -185,6 +226,7 @@ class AdvisorySourceRequestTest(unittest.TestCase):
         self.assertIn("Phase: codex consolidation — completed (exit 0)", summary)
         self.assertIn("type=evidence status=completed", event_log)
         self.assertIn("type=consolidation status=completed", event_log)
+        self.assertIn("OUTPUT_VALIDATION status=completed", event_log)
         prerequisites.assert_called_once_with("claude")
         self.assertEqual([call.args[1] for call in run.call_args_list], ["claude", "codex"])
         self.assertTrue(command.call_args_list[0].kwargs["read_only"])

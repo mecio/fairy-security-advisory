@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import getpass
+import hashlib
 import json
 import os
 import shutil
@@ -841,6 +842,55 @@ def consolidation_prompt(
     )
 
 
+def canonical_report_paths(started_at: dt.datetime) -> dict[str, Path]:
+    """Resolve the three canonical local outputs expected from a complete run."""
+    config_path = effective_config_path(CONFIG_DIR, "reports.yaml")
+    reports = safe_load_yaml(config_path).get("reports", {})
+    daily_directory = ROOT / str(
+        reports.get("daily_directory", "output/daily-advisory-check")
+    )
+    daily_filename = started_at.strftime(
+        str(reports.get("daily_filename", "%Y-%m-%d.md"))
+    )
+    return {
+        "daily report": daily_directory / daily_filename,
+        "summary": ROOT / str(reports.get("summary_file", "output/check-summary.md")),
+        "follow-up": ROOT / str(reports.get("followup_file", "output/followup.md")),
+    }
+
+
+def report_signature(path: Path) -> str | None:
+    if not path.is_file():
+        return None
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def validate_canonical_report_updates(
+    paths: dict[str, Path], before: dict[str, str | None],
+) -> tuple[bool, str]:
+    """Reject a nominally successful coordinator that did not publish its result."""
+    missing = [
+        name for name, path in paths.items()
+        if not path.is_file() or not path.stat().st_size
+    ]
+    changed = {
+        name: report_signature(path) != before.get(name)
+        for name, path in paths.items()
+    }
+    unchanged_required = [
+        name for name in ("daily report", "summary") if not changed.get(name, False)
+    ]
+    problems: list[str] = []
+    if missing:
+        problems.append("missing or empty: " + ", ".join(missing))
+    if unchanged_required:
+        problems.append("not updated: " + ", ".join(unchanged_required))
+    if problems:
+        return False, "; ".join(problems)
+    followup_state = "updated" if changed.get("follow-up") else "verified unchanged"
+    return True, f"daily report and summary updated; follow-up {followup_state}"
+
+
 def ai_command(
     provider: str, profile: str | None = None, execution_mode: str | None = None,
     *, non_interactive: bool = False, prompt: str | None = None,
@@ -1088,6 +1138,10 @@ def run_ai_check(
             message="Evidence group completed",
         )
         dossiers.append(dossier)
+    canonical_paths = canonical_report_paths(started_at)
+    canonical_before = {
+        name: report_signature(path) for name, path in canonical_paths.items()
+    }
     command = ai_command(
         provider, profile_name, mode_name, non_interactive=True,
         prompt=consolidation_prompt(provider, plan_path, dossiers, mode_name),
@@ -1122,6 +1176,30 @@ def run_ai_check(
         execution_mode=mode_name, capture_path=coordinator_output,
         event_log_path=log_path,
     )
+    reports_valid = False
+    report_validation = "coordinator command failed"
+    if result == 0:
+        reports_valid, report_validation = validate_canonical_report_updates(
+            canonical_paths, canonical_before,
+        )
+        if not reports_valid:
+            result = 2
+            print(
+                "Coordinator exited successfully but canonical output validation failed: "
+                + report_validation,
+                file=sys.stderr,
+            )
+            append_private_line(
+                log_path,
+                f"{dt.datetime.now(dt.timezone.utc).isoformat().replace('+00:00', 'Z')} "
+                f"OUTPUT_VALIDATION status=failed detail={report_validation}",
+            )
+        else:
+            append_private_line(
+                log_path,
+                f"{dt.datetime.now(dt.timezone.utc).isoformat().replace('+00:00', 'Z')} "
+                f"OUTPUT_VALIDATION status=completed detail={report_validation}",
+            )
     phase_status = "completed" if result == 0 else "failed"
     phase_results.append(f"{provider} consolidation — {phase_status} (exit {result})")
     append_private_line(

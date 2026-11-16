@@ -18,6 +18,24 @@ from typing import Any, Iterable
 
 ROOT = Path(__file__).resolve().parent.parent
 USAGE_FILE = ROOT / "output/ai-usage/events.jsonl"
+TRANSIENT_CODEX_ENV_VARS = frozenset({
+    "CODEX_CI",
+    "CODEX_SANDBOX_NETWORK_DISABLED",
+    "CODEX_SESSION_ID",
+    "CODEX_THREAD_ID",
+    "CODEX_TOOL_CALL_ID",
+})
+
+
+def agent_subprocess_environment(
+    provider: str, source: dict[str, str] | None = None,
+) -> dict[str, str]:
+    """Return an agent environment detached from an enclosing IDE Codex session."""
+    environment = dict(source if source is not None else os.environ)
+    if provider == "codex":
+        for name in TRANSIENT_CODEX_ENV_VARS:
+            environment.pop(name, None)
+    return environment
 
 
 def _number(value: Any) -> int:
@@ -97,7 +115,7 @@ def run_tracked_command(
     process = subprocess.Popen(
         command, cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         stdin=subprocess.DEVNULL, text=True, encoding="utf-8", errors="replace",
-        bufsize=1,
+        bufsize=1, env=agent_subprocess_environment(provider),
     )
     assert process.stdout is not None
     for line in process.stdout:

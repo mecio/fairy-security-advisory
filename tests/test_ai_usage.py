@@ -4,17 +4,23 @@
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
+import os
 import stat
 import subprocess
 from unittest.mock import patch
 
 from scripts.ai_usage import (
-    append_cli_diagnostic, append_usage_record, load_usage_records, summarize_usage,
-    run_tracked_command, usage_from_event,
+    TRANSIENT_CODEX_ENV_VARS, append_cli_diagnostic, append_usage_record,
+    load_usage_records, run_tracked_command, summarize_usage, usage_from_event,
 )
 
 
 class AIUsageTest(unittest.TestCase):
+    @patch.dict("os.environ", {
+        "CODEX_SESSION_ID": "parent-session",
+        "CODEX_SANDBOX_NETWORK_DISABLED": "1",
+        "FAIRY_TEST_ENV": "preserved",
+    })
     @patch("scripts.ai_usage.append_usage_record")
     @patch("scripts.ai_usage.subprocess.Popen")
     def test_non_interactive_agent_receives_closed_stdin(self, popen, _usage) -> None:
@@ -29,6 +35,9 @@ class AIUsageTest(unittest.TestCase):
 
         self.assertEqual(result, 0)
         self.assertEqual(popen.call_args.kwargs["stdin"], subprocess.DEVNULL)
+        child_environment = popen.call_args.kwargs["env"]
+        self.assertEqual(child_environment["FAIRY_TEST_ENV"], "preserved")
+        self.assertTrue(TRANSIENT_CODEX_ENV_VARS.isdisjoint(child_environment))
 
     def test_cli_diagnostic_is_retained_in_private_event_log(self) -> None:
         with TemporaryDirectory() as directory:

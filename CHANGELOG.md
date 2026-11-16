@@ -9,6 +9,10 @@ and the project intends to use [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- The desktop sidebar now groups operational pages, administration pages, and
+  help pages in task-oriented order with non-selectable visual separators.
+- Run check now explains that the selected coordinator affects only Inventory
+  projects without an explicit Codex or Claude preference.
 - Complete desktop analyses now show the active Codex or Claude provider,
   current phase, elapsed time, and verified project-group progress in both the
   Run check page and a cross-page footer indicator.
@@ -31,6 +35,10 @@ and the project intends to use [Semantic Versioning](https://semver.org/).
   that works without an IDE approval reviewer, and retain CLI diagnostics in
   the private run log. Agent stdin is explicitly closed so Codex and Claude do
   not wait indefinitely for additional piped instructions.
+- Child Codex processes now discard transient parent IDE/session sandbox
+  variables while preserving authentication and user configuration. Complete
+  runs also verify canonical report changes and return exit code 2 instead of a
+  false success when the coordinator could not publish its result.
 - Claude Code installation now uses Anthropic's recommended native user
   installer instead of npm, preserving IDE-managed copies and providing the
   same stable executable resolution used for Codex.

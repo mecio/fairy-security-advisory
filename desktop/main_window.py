@@ -12,9 +12,9 @@ import shutil
 import time
 from pathlib import Path
 
-from PySide6.QtCore import QProcess, QProcessEnvironment, Qt, QTimer, QUrl
+from PySide6.QtCore import QProcess, QProcessEnvironment, QSize, Qt, QTimer, QUrl
 from PySide6.QtGui import (
-    QCloseEvent, QDesktopServices, QFont, QPixmap, QTextCursor, QTextDocument,
+    QCloseEvent, QColor, QDesktopServices, QFont, QPixmap, QTextCursor, QTextDocument,
 )
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -49,6 +49,7 @@ from PySide6.QtWidgets import (
 )
 
 from desktop import services
+from scripts.ai_usage import TRANSIENT_CODEX_ENV_VARS
 from desktop.config_forms import (
     AIAgentsConfigForm, AdvisorySourcesConfigForm, BackupsConfigForm,
     ProjectsConfigForm, ReportsConfigForm,
@@ -208,12 +209,15 @@ class MainWindow(QMainWindow):
         self.process.setProcessChannelMode(QProcess.ProcessChannelMode.MergedChannels)
         process_environment = QProcessEnvironment.systemEnvironment()
         process_environment.insert("FAIRY_GUI_PROGRESS", "1")
+        for variable in TRANSIENT_CODEX_ENV_VARS:
+            process_environment.remove(variable)
         self.process.setProcessEnvironment(process_environment)
         self.process.readyReadStandardOutput.connect(self._read_process_output)
         self.process.finished.connect(self._process_finished)
         self.chat_process = QProcess(self)
         self.chat_process.setWorkingDirectory(str(services.ROOT))
         self.chat_process.setProcessChannelMode(QProcess.ProcessChannelMode.SeparateChannels)
+        self.chat_process.setProcessEnvironment(process_environment)
         self.chat_process.readyReadStandardOutput.connect(self._read_chat_output)
         self.chat_process.finished.connect(self._chat_finished)
         self.chat_response = ""
@@ -250,10 +254,33 @@ class MainWindow(QMainWindow):
 
         self.navigation = QListWidget()
         self.navigation.setObjectName("navigation")
-        self.navigation.addItems((
-            "Dashboard", "Configuration", "Inventory", "Reports", "Logs",
-            "AI issue assistant", "Run check", "System status", "User guide", "About",
-        ))
+        navigation_entries: tuple[tuple[str, int] | None, ...] = (
+            ("Dashboard", PAGE_DASHBOARD),
+            ("Reports", PAGE_REPORTS),
+            ("AI issue assistant", PAGE_ASSISTANT),
+            ("Run check", PAGE_RUN),
+            ("Logs", PAGE_LOGS),
+            None,
+            ("Inventory", PAGE_INVENTORY),
+            ("Configuration", PAGE_CONFIGURATION),
+            ("System status", PAGE_STATUS),
+            None,
+            ("User guide", PAGE_GUIDE),
+            ("About", PAGE_ABOUT),
+        )
+        for entry in navigation_entries:
+            if entry is None:
+                separator_item = QListWidgetItem("────────────────")
+                separator_item.setFlags(Qt.ItemFlag.ItemIsEnabled)
+                separator_item.setForeground(QColor("#3b5874"))
+                separator_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                separator_item.setSizeHint(QSize(0, 15))
+                self.navigation.addItem(separator_item)
+                continue
+            label, page_index = entry
+            item = QListWidgetItem(label)
+            item.setData(Qt.ItemDataRole.UserRole, page_index)
+            self.navigation.addItem(item)
         self.navigation.currentRowChanged.connect(self._page_selected)
         sidebar_layout.addWidget(self.navigation, 1)
         sidebar_logo = QLabel()
@@ -297,7 +324,7 @@ class MainWindow(QMainWindow):
         self.statusBar().addPermanentWidget(self.global_analysis_label)
         self.statusBar().addPermanentWidget(self.global_analysis_progress)
         self.statusBar().addPermanentWidget(self.footer_identity)
-        self.navigation.setCurrentRow(0)
+        self._navigate_to_page(PAGE_DASHBOARD)
 
     @staticmethod
     def _page(title: str, subtitle: str) -> tuple[QWidget, QVBoxLayout]:
@@ -372,7 +399,7 @@ class MainWindow(QMainWindow):
         refresh.clicked.connect(self.refresh_all)
         actions.addWidget(refresh)
         run = QPushButton("Open Run check")
-        run.clicked.connect(lambda: self.navigation.setCurrentRow(PAGE_RUN))
+        run.clicked.connect(lambda: self._navigate_to_page(PAGE_RUN))
         actions.addWidget(run)
         actions.addStretch()
         layout.addLayout(actions)
@@ -956,6 +983,19 @@ class MainWindow(QMainWindow):
         controls.addStretch()
         layout.addLayout(controls)
 
+        routing_notice = QLabel(
+            "The selected agent is the coordinator and applies only to Inventory "
+            "projects whose AI preference is ‘-’. Projects explicitly assigned to "
+            "Codex or Claude keep their configured agent."
+        )
+        routing_notice.setObjectName("routingNotice")
+        routing_notice.setWordWrap(True)
+        routing_notice.setStyleSheet(
+            "background:#10243d; border:1px solid #31516e; border-radius:6px; "
+            "color:#c9dded; padding:9px 12px; margin:2px 0 4px 0;"
+        )
+        layout.addWidget(routing_notice)
+
         buttons = QHBoxLayout()
         prerequisites = QPushButton("Check prerequisites")
         prerequisites.setProperty("variant", "secondary")
@@ -1113,18 +1153,28 @@ class MainWindow(QMainWindow):
         return page
 
     def _page_selected(self, row: int) -> None:
-        if row >= 0:
-            self.pages.setCurrentIndex(row)
-        if row == PAGE_INVENTORY:
+        item = self.navigation.item(row) if row >= 0 else None
+        page_index = item.data(Qt.ItemDataRole.UserRole) if item is not None else None
+        if not isinstance(page_index, int):
+            return
+        self.pages.setCurrentIndex(page_index)
+        if page_index == PAGE_INVENTORY:
             self.load_inventory()
-        elif row == PAGE_REPORTS:
+        elif page_index == PAGE_REPORTS:
             self.load_reports()
-        elif row == PAGE_LOGS:
+        elif page_index == PAGE_LOGS:
             self.load_analysis_logs()
-        elif row == PAGE_ASSISTANT:
+        elif page_index == PAGE_ASSISTANT:
             self.load_assistant_issues()
-        elif row == PAGE_STATUS:
+        elif page_index == PAGE_STATUS:
             self.load_status()
+
+    def _navigate_to_page(self, page_index: int) -> None:
+        for row in range(self.navigation.count()):
+            item = self.navigation.item(row)
+            if item.data(Qt.ItemDataRole.UserRole) == page_index:
+                self.navigation.setCurrentItem(item)
+                return
 
     def _search_guide(self, *, backward: bool) -> None:
         query = self.guide_search.text().strip()
@@ -1740,7 +1790,7 @@ class MainWindow(QMainWindow):
         )
 
     def open_followup_ai_chat(self, issue_id: str) -> None:
-        self.navigation.setCurrentRow(PAGE_ASSISTANT)
+        self._navigate_to_page(PAGE_ASSISTANT)
         for index in range(self.assistant_issue_combo.count()):
             issue = self.assistant_issue_combo.itemData(index, Qt.ItemDataRole.UserRole)
             if isinstance(issue, dict) and issue.get("ID") == issue_id:
@@ -2244,7 +2294,7 @@ class MainWindow(QMainWindow):
             action, provider=provider, profile=profile, mode=mode,
             assume_yes=assume_yes, non_interactive=non_interactive,
         )
-        self.navigation.setCurrentRow(PAGE_RUN)
+        self._navigate_to_page(PAGE_RUN)
         self.log.appendPlainText(f"\n$ {shlex.join(command)}\n")
         self.current_action = action
         self.process_output_buffer = ""
