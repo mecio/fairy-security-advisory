@@ -128,6 +128,7 @@ class AdvisorySourceRequestTest(unittest.TestCase):
         self.assertLess(command.index("--ask-for-approval"), command.index("exec"))
         self.assertNotIn("--approve-for-me", command)
         self.assertIn("workspace-write", command)
+        self.assertIn("sandbox_workspace_write.network_access=true", command)
         self.assertIn("--json", command)
 
     @patch("scripts.manage.resolve_agent_executable", return_value="/usr/bin/codex")
@@ -135,6 +136,7 @@ class AdvisorySourceRequestTest(unittest.TestCase):
         command = ai_command("codex", non_interactive=True, read_only=True)
         self.assertLess(command.index("--ask-for-approval"), command.index("exec"))
         self.assertIn("read-only", command)
+        self.assertNotIn("sandbox_workspace_write.network_access=true", command)
         self.assertNotIn("--approve-for-me", command)
 
     @patch("scripts.manage.resolve_agent_executable", return_value="/usr/bin/claude")

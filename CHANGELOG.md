@@ -39,6 +39,9 @@ and the project intends to use [Semantic Versioning](https://semver.org/).
   variables while preserving authentication and user configuration. Complete
   runs also verify canonical report changes and return exit code 2 instead of a
   false success when the coordinator could not publish its result.
+- The Codex coordinator explicitly enables network access inside its
+  `workspace-write` sandbox, avoiding Bubblewrap loopback failures without
+  granting `danger-full-access`.
 - Claude Code installation now uses Anthropic's recommended native user
   installer instead of npm, preserving IDE-managed copies and providing the
   same stable executable resolution used for Codex.

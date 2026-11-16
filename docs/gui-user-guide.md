@@ -499,6 +499,10 @@ When the application is started from an IDE agent terminal, fAIry removes only
 the transient parent Codex session and sandbox variables from child AI
 processes. It keeps normal account authentication and user configuration. This
 prevents the standalone CLI from being mistaken for a nested IDE tool call.
+The Codex coordinator uses `workspace-write` with outbound network access for
+advisory sources and scanner databases; it does not use `danger-full-access`.
+This mode is also compatible with Linux systems where Bubblewrap cannot create
+an isolated loopback interface.
 
 The complete workflow asks the agent to:
 

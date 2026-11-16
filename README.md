@@ -500,6 +500,12 @@ launch. This lets a standalone Codex CLI create its own least-privilege sandbox
 even when fAIry was opened from an IDE-integrated agent terminal. Authentication
 and the user's normal Codex configuration are preserved.
 
+The Codex coordinator retains `workspace-write` isolation but receives outbound
+network access because advisory verification and scanner databases require it.
+This also avoids Linux Bubblewrap loopback setup failures on hosts that cannot
+create an isolated network namespace. fAIry never switches Codex to
+`danger-full-access`.
+
 While an analysis is running, the desktop footer remains visible on every page
 and identifies the active provider and phase. The Run check page also shows
 elapsed time and completed projects. Progress advances only at verified

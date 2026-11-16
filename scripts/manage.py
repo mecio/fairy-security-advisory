@@ -905,6 +905,8 @@ def ai_command(
     if provider == "codex":
         if non_interactive:
             command = [executable, "--search", "--ask-for-approval", "never"]
+            if not read_only:
+                command.extend(("--config", "sandbox_workspace_write.network_access=true"))
             command.extend(("exec", "--model", model))
             if read_only:
                 command.extend(("--sandbox", "read-only"))
