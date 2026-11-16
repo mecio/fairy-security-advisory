@@ -96,7 +96,8 @@ def run_tracked_command(
     visible_messages: list[str] = []
     process = subprocess.Popen(
         command, cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-        text=True, encoding="utf-8", errors="replace", bufsize=1,
+        stdin=subprocess.DEVNULL, text=True, encoding="utf-8", errors="replace",
+        bufsize=1,
     )
     assert process.stdout is not None
     for line in process.stdout:

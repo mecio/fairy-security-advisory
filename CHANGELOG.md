@@ -12,6 +12,8 @@ and the project intends to use [Semantic Versioning](https://semver.org/).
 - Complete desktop analyses now show the active Codex or Claude provider,
   current phase, elapsed time, and verified project-group progress in both the
   Run check page and a cross-page footer indicator.
+- The Linux application icon now uses a true transparent background instead of
+  embedding the dark rounded-square tile.
 - Technology inventory projects can now be included or excluded from advisory
   analysis individually and routed to Codex or Claude; `-` inherits the launch
   coordinator, local choices survive inventory refreshes, provider evidence is
@@ -27,7 +29,8 @@ and the project intends to use [Semantic Versioning](https://semver.org/).
   stable executable independent of the launching environment.
 - Non-interactive Codex checks now use an explicit no-prompt sandbox policy
   that works without an IDE approval reviewer, and retain CLI diagnostics in
-  the private run log.
+  the private run log. Agent stdin is explicitly closed so Codex and Claude do
+  not wait indefinitely for additional piped instructions.
 - Claude Code installation now uses Anthropic's recommended native user
   installer instead of npm, preserving IDE-managed copies and providing the
   same stable executable resolution used for Codex.

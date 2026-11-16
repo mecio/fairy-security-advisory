@@ -5,14 +5,31 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
 import stat
+import subprocess
+from unittest.mock import patch
 
 from scripts.ai_usage import (
     append_cli_diagnostic, append_usage_record, load_usage_records, summarize_usage,
-    usage_from_event,
+    run_tracked_command, usage_from_event,
 )
 
 
 class AIUsageTest(unittest.TestCase):
+    @patch("scripts.ai_usage.append_usage_record")
+    @patch("scripts.ai_usage.subprocess.Popen")
+    def test_non_interactive_agent_receives_closed_stdin(self, popen, _usage) -> None:
+        process = popen.return_value
+        process.stdout = []
+        process.wait.return_value = 0
+
+        result = run_tracked_command(
+            ["codex", "exec", "prompt"], "codex", model="model",
+            profile="economical", execution_mode="economical",
+        )
+
+        self.assertEqual(result, 0)
+        self.assertEqual(popen.call_args.kwargs["stdin"], subprocess.DEVNULL)
+
     def test_cli_diagnostic_is_retained_in_private_event_log(self) -> None:
         with TemporaryDirectory() as directory:
             path = Path(directory) / "run.log"

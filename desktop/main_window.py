@@ -1863,6 +1863,7 @@ class MainWindow(QMainWindow):
         self.assistant_send_button.setEnabled(False)
         self.chat_process.setProperty("issue_id", issue_id)
         self.chat_process.start(command[0], command[1:])
+        self.chat_process.closeWriteChannel()
 
     def _read_chat_output(self) -> None:
         self.chat_response += bytes(
@@ -2252,6 +2253,7 @@ class MainWindow(QMainWindow):
         self.stop_button.setEnabled(True)
         self.statusBar().showMessage(f"Running {action}…")
         self.process.start(command[0], command[1:])
+        self.process.closeWriteChannel()
 
     def _read_process_output(self) -> None:
         data = bytes(self.process.readAllStandardOutput()).decode("utf-8", errors="replace")
