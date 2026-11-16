@@ -7,8 +7,22 @@ and the project intends to use [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- The desktop application now presents a versioned first-run EULA notice with
+  an explicit acceptance checkbox; the acceptance version and UTC timestamp
+  remain in ignored local configuration.
+- Linux AI startup now includes a read-only Bubblewrap/AppArmor preflight and a
+  guided, reviewable setup action for Codex and Claude Code.
+- Reports now offers a confirmed reset that archives current daily reports,
+  summary, follow-up, and closed-issue history locally before a fresh check.
+- Inventory now accepts user-declared technologies per project, marks them
+  separately from scanner findings, and preserves them across refreshes.
+
 ### Changed
 
+- Successful terminal handoffs close the desktop window automatically; active
+  analysis and chat processes block the handoff until they finish.
 - The desktop sidebar now groups operational pages, administration pages, and
   help pages in task-oriented order with non-selectable visual separators.
 - Run check now explains that the selected coordinator affects only Inventory
@@ -40,13 +54,20 @@ and the project intends to use [Semantic Versioning](https://semver.org/).
   runs also verify canonical report changes and return exit code 2 instead of a
   false success when the coordinator could not publish its result.
 - The Codex coordinator explicitly enables network access inside its
-  `workspace-write` sandbox, avoiding Bubblewrap loopback failures without
-  granting `danger-full-access`.
+  `workspace-write` sandbox without granting `danger-full-access`.
+- Claude processes launched by fAIry now require the OS sandbox, disable
+  unsandboxed command retries, and fail closed when isolation is unavailable.
 - Claude Code installation now uses Anthropic's recommended native user
   installer instead of npm, preserving IDE-managed copies and providing the
   same stable executable resolution used for Codex.
 - The AI issue assistant now gives the affected project a dedicated prominent
   heading and separates it visually from activity and advisory metadata.
+
+### Security
+
+- Ubuntu 24.04 AppArmor remediation now uses the distribution's
+  `bwrap-userns-restrict` profile and loads only that profile. Unknown Linux
+  restriction failures do not offer an executable system change.
 
 ## [0.1.2] - 2026-11-16
 

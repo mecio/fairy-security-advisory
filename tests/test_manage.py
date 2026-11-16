@@ -12,6 +12,7 @@ from scripts.manage import (
     render_cli_banner, run_ai_check,
     scoped_evidence_prompt, source_request, validate_canonical_report_updates,
 )
+from scripts.sandbox_preflight import claude_sandbox_settings
 
 
 class AdvisorySourceRequestTest(unittest.TestCase):
@@ -103,7 +104,10 @@ class AdvisorySourceRequestTest(unittest.TestCase):
     def test_claude_launch_uses_the_shared_skill_prompt(self, _which) -> None:
         self.assertEqual(
             ai_command("claude"),
-            ["/usr/bin/claude", "--model", "haiku", analysis_prompt("claude")],
+            [
+                "/usr/bin/claude", "--settings", claude_sandbox_settings(),
+                "--model", "haiku", analysis_prompt("claude"),
+            ],
         )
 
     @patch("scripts.manage.resolve_agent_executable", return_value="/usr/bin/codex")
@@ -144,6 +148,7 @@ class AdvisorySourceRequestTest(unittest.TestCase):
         command = ai_command("claude", non_interactive=True)
         self.assertIn("--print", command)
         self.assertIn("stream-json", command)
+        self.assertIn(claude_sandbox_settings(), command)
 
     def test_scoped_evidence_prompt_forbids_other_projects_and_writes(self) -> None:
         prompt = scoped_evidence_prompt(

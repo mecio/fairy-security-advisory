@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
     QComboBox,
+    QDialog,
     QFileDialog,
     QFrame,
     QGridLayout,
@@ -54,6 +55,7 @@ from desktop.config_forms import (
     AIAgentsConfigForm, AdvisorySourcesConfigForm, BackupsConfigForm,
     ProjectsConfigForm, ReportsConfigForm,
 )
+from desktop.inventory_technologies_dialog import InventoryTechnologiesDialog
 
 
 STYLE = """
@@ -61,8 +63,8 @@ QMainWindow, QWidget { background: #081426; color: #e8f2ff; }
 QWidget#sidebar { background: #0d1e35; }
 QWidget#actionCell { background: transparent; }
 QLabel#sidebarLogo { background: #0d1e35; border: 0; margin: 0; padding: 0; }
-QListWidget#navigation { background: #0d1e35; border: 0; padding: 10px; }
-QListWidget#navigation::item { padding: 12px 14px; border-radius: 7px; margin: 2px; }
+QListWidget#navigation { background: #0d1e35; border: 0; padding: 12px; }
+QListWidget#navigation::item { padding: 0 14px; border-radius: 7px; margin: 3px 2px; }
 QListWidget#navigation::item:selected { background: #123e5a; color: #63e7ff; }
 QFrame#card { background: #10243d; border: 1px solid #1b3c58; border-radius: 10px; }
 QLabel#metricValue { color: #63e7ff; font-size: 28px; font-weight: 700; }
@@ -82,6 +84,8 @@ QPushButton[variant="ai"] { background: #8b72c7; color: #ffffff; }
 QPushButton[variant="ai"]:hover { background: #a087dc; }
 QPushButton[variant="secondary"] { background: #4f6475; color: #ffffff; }
 QPushButton[variant="secondary"]:hover { background: #647b8e; }
+QPushButton[variant="info"] { background: #5b8fb5; color: #ffffff; }
+QPushButton[variant="info"]:hover { background: #72a6ca; }
 QPushButton:disabled { background: #334155; color: #94a3b8; }
 QLineEdit, QPlainTextEdit, QTextBrowser, QTreeWidget, QTableWidget, QListWidget {
   background: #07101e; color: #e8f2ff; border: 1px solid #24415b; border-radius: 6px;
@@ -196,6 +200,73 @@ class BarChartCard(QFrame):
         old_content.deleteLater()
 
 
+class SandboxSetupDialog(QDialog):
+    """Show the sandbox command and actions without squeezing button labels."""
+
+    def __init__(self, plan: dict[str, object], parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Configure the Linux AI sandbox")
+        self.resize(780, 470)
+        self.setMinimumSize(660, 420)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(22, 20, 22, 20)
+        layout.setSpacing(14)
+
+        description = QLabel(
+            "Codex and Claude Code use bubblewrap for OS-enforced command isolation "
+            f"on Linux.\n\n{plan['note']}\n\n"
+            "Review the command before continuing."
+        )
+        description.setWordWrap(True)
+        layout.addWidget(description)
+
+        layout.addWidget(QLabel("Command to run with administrator confirmation"))
+        command = QPlainTextEdit()
+        command.setReadOnly(True)
+        command.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
+        command.setPlainText(str(plan["command"] or "No reviewed automatic command is available for this system."))
+        layout.addWidget(command, 1)
+
+        resources = QHBoxLayout()
+        resources.setSpacing(10)
+        for title, address in (
+            ("Claude sandbox guide", plan["claude_documentation"]),
+            ("Ubuntu AppArmor guide", plan["ubuntu_documentation"]),
+        ):
+            button = QPushButton(title)
+            button.setProperty("variant", "info")
+            button.setMinimumWidth(button.fontMetrics().horizontalAdvance(title) + 44)
+            button.clicked.connect(
+                lambda _checked=False, url=address: QDesktopServices.openUrl(QUrl(str(url)))
+            )
+            resources.addWidget(button)
+        resources.addStretch()
+        layout.addLayout(resources)
+
+        actions = QHBoxLayout()
+        actions.setSpacing(10)
+        copy = QPushButton("Copy command")
+        copy.setMinimumWidth(copy.fontMetrics().horizontalAdvance(copy.text()) + 44)
+        copy.setEnabled(bool(plan["command"]))
+        copy.clicked.connect(lambda: QApplication.clipboard().setText(str(plan["command"])))
+        actions.addWidget(copy)
+        actions.addStretch()
+        cancel = QPushButton("Cancel")
+        cancel.setProperty("variant", "secondary")
+        cancel.setMinimumWidth(cancel.fontMetrics().horizontalAdvance(cancel.text()) + 44)
+        cancel.clicked.connect(self.reject)
+        actions.addWidget(cancel)
+        configure = QPushButton("Configure in terminal")
+        configure.setProperty("variant", "warning")
+        configure.setEnabled(bool(plan["supported"]))
+        configure.setMinimumWidth(
+            configure.fontMetrics().horizontalAdvance(configure.text()) + 44
+        )
+        configure.clicked.connect(self.accept)
+        actions.addWidget(configure)
+        layout.addLayout(actions)
+
+
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
@@ -274,12 +345,13 @@ class MainWindow(QMainWindow):
                 separator_item.setFlags(Qt.ItemFlag.ItemIsEnabled)
                 separator_item.setForeground(QColor("#3b5874"))
                 separator_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-                separator_item.setSizeHint(QSize(0, 15))
+                separator_item.setSizeHint(QSize(0, 26))
                 self.navigation.addItem(separator_item)
                 continue
             label, page_index = entry
             item = QListWidgetItem(label)
             item.setData(Qt.ItemDataRole.UserRole, page_index)
+            item.setSizeHint(QSize(0, 48))
             self.navigation.addItem(item)
         self.navigation.currentRowChanged.connect(self._page_selected)
         sidebar_layout.addWidget(self.navigation, 1)
@@ -731,7 +803,7 @@ class MainWindow(QMainWindow):
     def _inventory_page(self) -> QWidget:
         page, layout = self._page(
             "Technology inventory",
-            "Choose which detected projects receive advisory checks and optionally prefer an AI. Technical discovery remains read-only.",
+            "Choose projects and AI providers, and add technologies missed by the read-only scanner.",
         )
         self.inventory_tree = QTreeWidget()
         self.inventory_tree.setHeaderLabels((
@@ -747,6 +819,7 @@ class MainWindow(QMainWindow):
         self.inventory_tree.header().setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)
         self.inventory_tree.header().setSectionResizeMode(5, QHeaderView.ResizeMode.Stretch)
         self.inventory_tree.itemChanged.connect(self.update_inventory_count)
+        self.inventory_tree.itemSelectionChanged.connect(self._update_inventory_technology_action)
         layout.addWidget(self.inventory_tree, 1)
         buttons = QHBoxLayout()
         reload_button = QPushButton("Reload inventory view")
@@ -762,9 +835,17 @@ class MainWindow(QMainWindow):
         save_preferences.clicked.connect(self.save_inventory_preferences)
         buttons.addWidget(save_preferences)
         buttons.addStretch()
-        self.inventory_count = QLabel()
-        buttons.addWidget(self.inventory_count)
         layout.addLayout(buttons)
+        technology_actions = QHBoxLayout()
+        self.edit_technologies_button = QPushButton("Edit technologies for selected project…")
+        self.edit_technologies_button.setProperty("variant", "info")
+        self.edit_technologies_button.setEnabled(False)
+        self.edit_technologies_button.clicked.connect(self.edit_inventory_technologies)
+        technology_actions.addWidget(self.edit_technologies_button)
+        technology_actions.addStretch()
+        self.inventory_count = QLabel()
+        technology_actions.addWidget(self.inventory_count)
+        layout.addLayout(technology_actions)
         return page
 
     def _reports_page(self) -> QWidget:
@@ -809,7 +890,19 @@ class MainWindow(QMainWindow):
         reload_button = QPushButton("Reload reports")
         reload_button.setProperty("variant", "secondary")
         reload_button.clicked.connect(self.load_reports)
-        layout.addWidget(reload_button, alignment=Qt.AlignmentFlag.AlignLeft)
+        report_actions = QHBoxLayout()
+        report_actions.addWidget(reload_button)
+        self.reset_reports_button = QPushButton("Clear reports and follow-up…")
+        self.reset_reports_button.setProperty("variant", "danger")
+        self.reset_reports_button.setMinimumWidth(
+            self.reset_reports_button.fontMetrics().horizontalAdvance(
+                self.reset_reports_button.text()
+            ) + 44
+        )
+        self.reset_reports_button.clicked.connect(self.reset_reports_for_recheck)
+        report_actions.addWidget(self.reset_reports_button)
+        report_actions.addStretch()
+        layout.addLayout(report_actions)
         return page
 
     def _logs_page(self) -> QWidget:
@@ -1468,7 +1561,7 @@ class MainWindow(QMainWindow):
                 str(project.get("id", "unnamed")),
                 "",
                 ", ".join(map(str, project.get("roles", []))),
-                ", ".join(services.technology_names(project)),
+                ", ".join(services.inventory_technology_labels(project)),
                 str(project.get("path", "")),
             ))
             item.setData(0, Qt.ItemDataRole.UserRole, str(project.get("path", "")))
@@ -1478,6 +1571,7 @@ class MainWindow(QMainWindow):
                 if settings.get("enabled", True) else Qt.CheckState.Unchecked,
             )
             self.inventory_tree.addTopLevelItem(item)
+            item.setToolTip(4, item.text(4))
             preference = QComboBox()
             preference.addItem("-", "")
             preference.addItem("Codex", "codex")
@@ -1488,6 +1582,44 @@ class MainWindow(QMainWindow):
             self.inventory_tree.setItemWidget(item, 2, preference)
         self.inventory_tree.blockSignals(False)
         self.update_inventory_count()
+        self._update_inventory_technology_action()
+
+    def _update_inventory_technology_action(self) -> None:
+        self.edit_technologies_button.setEnabled(self.inventory_tree.currentItem() is not None)
+
+    def edit_inventory_technologies(self) -> None:
+        item = self.inventory_tree.currentItem()
+        if item is None:
+            return
+        path = str(item.data(0, Qt.ItemDataRole.UserRole) or "")
+        project = next(
+            (project for project in services.inventory_projects()
+             if str(project.get("path", "")) == path),
+            None,
+        )
+        if project is None:
+            QMessageBox.warning(self, "Project missing", "Reload the inventory and select the project again.")
+            return
+        try:
+            detected = services.technology_names({**project, "manual_technologies": []})
+            dialog = InventoryTechnologiesDialog(project, detected, self)
+        except ValueError as error:
+            QMessageBox.critical(self, "Invalid manual technologies", str(error))
+            return
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        try:
+            updated = services.update_manual_technologies(path, dialog.manual)
+        except (OSError, ValueError, services.ConfigurationError) as error:
+            QMessageBox.critical(self, "Unable to save technologies", str(error))
+            return
+        labels = ", ".join(services.inventory_technology_labels(updated))
+        item.setText(4, labels)
+        item.setToolTip(4, labels)
+        QMessageBox.information(
+            self, "Technologies saved",
+            "Manual technologies were saved in ignored local configuration and will survive inventory refreshes.",
+        )
 
     def update_inventory_count(self, _item: QTreeWidgetItem | None = None, _column: int = 0) -> None:
         total = self.inventory_tree.topLevelItemCount()
@@ -1545,6 +1677,46 @@ class MainWindow(QMainWindow):
         if not self.report_list.count():
             self.report_viewer.setMarkdown("# No reports yet\n\nRun a complete advisory check to create local output.")
             self.report_stack.setCurrentWidget(self.report_viewer)
+        self.reset_reports_button.setEnabled(self.report_list.count() > 0)
+
+    def reset_reports_for_recheck(self) -> None:
+        """Archive the current reports before testing rediscovery."""
+        if any(
+            process.state() != QProcess.ProcessState.NotRunning
+            for process in (self.process, self.chat_process)
+        ):
+            QMessageBox.warning(
+                self, "Operation in progress",
+                "Wait for the analysis or AI conversation to finish before clearing reports.",
+            )
+            return
+        count = len(services.report_entries())
+        if not count:
+            QMessageBox.information(self, "No reports", "There are no local reports to clear.")
+            return
+        if QMessageBox.question(
+            self, "Clear reports and follow-up",
+            f"Move {count} local report and follow-up file(s) into a private reset "
+            "snapshot and clear the Reports view?\n\n"
+            "This includes open issues and closed-issue archives. The next complete "
+            "AI check can rebuild them from current evidence. Previous resolution "
+            "states remain available to the agent in the snapshot. Analysis logs "
+            "and configuration are preserved.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        ) != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            snapshot, moved = services.archive_and_reset_reports()
+        except (OSError, ValueError, services.ConfigurationError) as error:
+            QMessageBox.critical(self, "Unable to clear reports", str(error))
+            return
+        self.refresh_all()
+        QMessageBox.information(
+            self, "Reports cleared",
+            f"Archived {moved} file(s) in:\n{snapshot}\n\n"
+            "Run a complete AI check to rebuild the current reports and follow-up table.",
+        )
 
     def show_report(self, row: int) -> None:
         path = self.report_paths.get(row)
@@ -1894,9 +2066,26 @@ class MainWindow(QMainWindow):
         issue_id = issue.get("ID", "")
         history = services.assistant_history(issue_id)
         prompt = services.assistant_prompt(issue, message, history)
+        provider = self.assistant_provider_combo.currentText()
+        sandbox = services.sandbox_preflight((provider,))
+        if not sandbox["ready"]:
+            dialog = QMessageBox(self)
+            dialog.setIcon(QMessageBox.Icon.Warning)
+            dialog.setWindowTitle("AI sandbox preflight failed")
+            dialog.setText(
+                f"{sandbox['details']}\n\n{sandbox['guidance']}\n\n"
+                "No issue context has been sent to the AI provider."
+            )
+            configure = dialog.addButton("Configure…", QMessageBox.ButtonRole.ActionRole)
+            dialog.addButton(QMessageBox.StandardButton.Close)
+            dialog.exec()
+            if dialog.clickedButton() == configure:
+                self._navigate_to_page(PAGE_STATUS)
+                self.configure_ai_sandbox()
+            return
         try:
             command = services.assistant_command(
-                self.assistant_provider_combo.currentText(),
+                provider,
                 self.assistant_profile_combo.currentText(), prompt,
             )
             services.append_assistant_history(issue_id, "user", message)
@@ -2022,6 +2211,8 @@ class MainWindow(QMainWindow):
                 actions = [("Initialize", self.initialize_local_config)]
             elif state != "Ready" and component == "Inventory":
                 actions = [("Refresh", self.refresh_inventory)]
+            elif state != "Ready" and component == "AI OS sandbox":
+                actions = [("Configure…", self.configure_ai_sandbox)]
             elif state == "Login required" and component in {"codex", "claude"}:
                 actions = [(
                     "Log in",
@@ -2067,6 +2258,7 @@ class MainWindow(QMainWindow):
                     "Initialize": "warning",
                     "Refresh": "secondary",
                     "Remove": "danger",
+                    "Configure…": "warning",
                 }.get(label, "secondary"))
                 button.setMinimumHeight(32)
                 button.clicked.connect(handler)
@@ -2074,6 +2266,65 @@ class MainWindow(QMainWindow):
             self.status_table.setCellWidget(row, 3, action_cell)
         for provider in self.agent_account_widgets:
             self.refresh_agent_account(provider)
+
+    def configure_ai_sandbox(self) -> None:
+        """Explain and optionally launch the reviewed AppArmor setup command."""
+        plan = services.sandbox_configuration_plan()
+        if SandboxSetupDialog(plan, self).exec() != QDialog.DialogCode.Accepted:
+            return
+        if not self._can_handoff_to_terminal():
+            return
+
+        terminal = next(
+            (path for name in ("x-terminal-emulator", "gnome-terminal", "konsole")
+             if (path := shutil.which(name))),
+            None,
+        )
+        if not terminal:
+            QApplication.clipboard().setText(plan["command"])
+            QMessageBox.warning(
+                self, "Terminal unavailable",
+                "No supported terminal emulator was found. The reviewed command was copied "
+                "to the clipboard.",
+            )
+            return
+        script = (
+            "set -o pipefail\n"
+            f"bash -lc {shlex.quote(str(plan['command']))}\n"
+            "status=$?\n"
+            "printf '\\nSandbox configuration finished with exit code %s.\\n' \"$status\"\n"
+            "printf 'Restart fAIry, refresh System status, then press Enter to close…'\n"
+            "read -r _\n"
+            "exit \"$status\""
+        )
+        arguments = (
+            ["--", "bash", "-lc", script]
+            if Path(terminal).name == "gnome-terminal"
+            else ["-e", "bash", "-lc", script]
+        )
+        result = QProcess.startDetached(terminal, arguments, str(services.ROOT))
+        started = result[0] if isinstance(result, tuple) else bool(result)
+        if not started:
+            QApplication.clipboard().setText(plan["command"])
+            QMessageBox.critical(
+                self, "Unable to open terminal",
+                "The setup terminal could not be started. The command was copied to the clipboard.",
+            )
+            return
+        self.close()
+
+    def _can_handoff_to_terminal(self) -> bool:
+        """Do not interrupt a managed operation during a terminal handoff."""
+        if any(
+            process.state() != QProcess.ProcessState.NotRunning
+            for process in (self.process, self.chat_process)
+        ):
+            QMessageBox.warning(
+                self, "Operation in progress",
+                "Wait for or stop the current analysis or AI conversation before opening a terminal.",
+            )
+            return False
+        return True
 
     def install_desktop_launcher(self) -> None:
         if QMessageBox.question(
@@ -2126,6 +2377,8 @@ class MainWindow(QMainWindow):
             "Credentials and tokens are handled by the CLI and are never stored by fAIry.",
         ) != QMessageBox.StandardButton.Yes:
             return
+        if not self._can_handoff_to_terminal():
+            return
         terminal = next(
             (path for name in ("x-terminal-emulator", "gnome-terminal", "konsole")
              if (path := shutil.which(name))),
@@ -2142,7 +2395,7 @@ class MainWindow(QMainWindow):
             f"{shlex.join(command)}\n"
             "status=$?\n"
             "printf '\\nAuthentication finished with exit code %s.\\n' \"$status\"\n"
-            "printf 'Return to fAIry, refresh System status, then press Enter to close…'\n"
+            "printf 'Restart fAIry, refresh System status, then press Enter to close…'\n"
             "read -r _\n"
             "exit \"$status\""
         )
@@ -2160,9 +2413,7 @@ class MainWindow(QMainWindow):
                 "The login terminal could not be started. The command was copied to the clipboard.",
             )
             return
-        self.statusBar().showMessage(
-            f"{provider} login opened; refresh System status when authentication finishes", 12000,
-        )
+        self.close()
 
     def install_component(self, component: str) -> None:
         """Review and launch a fixed installation plan in a visible terminal."""
@@ -2205,6 +2456,8 @@ class MainWindow(QMainWindow):
             return
         if dialog.clickedButton() != install_button:
             return
+        if not self._can_handoff_to_terminal():
+            return
 
         terminal = next(
             (path for name in ("x-terminal-emulator", "gnome-terminal", "konsole")
@@ -2240,9 +2493,7 @@ class MainWindow(QMainWindow):
                 "The installation terminal could not be started. The command was copied to the clipboard.",
             )
             return
-        self.statusBar().showMessage(
-            f"{component} installer opened; refresh system status when it finishes", 10000,
-        )
+        self.close()
 
     def run_ai_analysis(self) -> None:
         provider = self.provider_combo.currentText()
@@ -2262,6 +2513,22 @@ class MainWindow(QMainWindow):
                 self, "No projects selected",
                 "Select at least one project in Technology inventory before running analysis.",
             )
+            return
+        sandbox = services.sandbox_preflight(routing["required_providers"])
+        if not sandbox["ready"]:
+            dialog = QMessageBox(self)
+            dialog.setIcon(QMessageBox.Icon.Warning)
+            dialog.setWindowTitle("AI sandbox preflight failed")
+            dialog.setText(
+                f"{sandbox['details']}\n\n{sandbox['guidance']}\n\n"
+                "Configure the sandbox from System status, then run the analysis again."
+            )
+            configure = dialog.addButton("Configure…", QMessageBox.ButtonRole.ActionRole)
+            dialog.addButton(QMessageBox.StandardButton.Close)
+            dialog.exec()
+            if dialog.clickedButton() == configure:
+                self._navigate_to_page(PAGE_STATUS)
+                self.configure_ai_sandbox()
             return
         model_summary = ", ".join(
             f"{name}: {models[name]}" for name in routing["required_providers"]

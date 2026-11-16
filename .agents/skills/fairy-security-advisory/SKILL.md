@@ -14,8 +14,11 @@ Run a repeatable, evidence-based, read-only check against inventoried projects. 
    falling back to the versioned factory files in `config/`,
    `output/followup.md`, archived follow-ups under
    `output/followup-archive/YYYY/MM.md` when present, and the latest daily report under
-   `output/daily-advisory-check/` in full. If the local project configuration
-   is missing, explain how to copy `config/projects.example.yaml` as documented
+   `output/daily-advisory-check/` in full. If `output/report-resets/` contains
+   snapshots, consult their follow-up and closed-issue archives, newest first,
+   for historical status evidence. Their files are not current findings.
+   If the local project configuration is missing, explain how to copy
+   `config/projects.example.yaml` as documented
    in the README; never invent local paths.
 2. Before analyzing a project, read its `AGENTS.md` and referenced directives relevant to version, dependency, and infrastructure scanning.
 3. Validate configuration with `python3 scripts/validate_project.py --config-dir config`. If `inventory.projects` in `config/local/projects.yaml` is empty or older than `refresh_after_hours`, run `python3 scripts/inventory.py --config-dir config`.
@@ -51,10 +54,15 @@ Run a repeatable, evidence-based, read-only check against inventoried projects. 
    reports. Stop without updating reports if a required evidence phase fails.
 4. Open every candidate advisory and collect its identifier/CVE, affected and fixed versions, prerequisites, vector, mitigations, and date. Confirm through primary sources in this order: vendor, official project, CVE record. Treat aggregators as signals, not sole evidence.
 5. Check manifests and lockfiles and, when possible without mutation, installed versions. Always distinguish presence, declared version, verified installed version, and production. Never infer production from local development.
+   Treat `manual_technologies` in the local inventory as user-declared scope
+   hints; verify their actual use and version before claiming applicability.
 6. If `osv-scanner` or `trivy` is available, use it read-only on relevant targets and record the command, version, and summary. If missing, run the validator and show the suggested Linux commands, making clear that execution requires review and explicit authorization; read [references/linux-tool-installation.md](references/linux-tool-installation.md) when explaining alternatives. Do not install tools or update databases/caches without an explicit request, and do not treat an automated finding as proven applicability.
 7. Evaluate actual API use, reachability, configuration, and mitigations. Classify each item as `immediate-action`, `follow-up`, `monitor`, or `not-applicable`, with risk and confidence.
 8. Review open activities in the local follow-up. Do not reopen an activity
-   recorded as externally resolved without new evidence. Keep vulnerability
+   recorded as externally resolved without new evidence. After a report reset,
+   carry still-open work into the new follow-up with stable IDs and dates only
+   when it remains applicable to selected projects; retain historical closure
+   decisions as context rather than new open findings. Keep vulnerability
    closure, mitigations, runtime migrations, and other remediation work as
    separate activities when their evidence or completion criteria differ.
 

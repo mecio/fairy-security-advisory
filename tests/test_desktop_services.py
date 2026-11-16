@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: 2026 fAIry Security Advisory contributors
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
+import os
 import stat
 import datetime as dt
 from types import SimpleNamespace
@@ -12,17 +13,116 @@ from unittest.mock import patch
 import yaml
 
 from desktop.services import (
-    ConfigurationError, agent_authentication, agent_usage_status, analysis_routing,
+    ConfigurationError, accept_eula, agent_authentication, agent_usage_status, analysis_routing,
+    archive_and_reset_reports,
     analysis_run_entries, analysis_run_files, assistant_command, delete_analysis_run,
-    extract_issue_update, project_metadata,
+    eula_accepted, extract_issue_update, project_metadata,
     followup_source_links, proposal_changes, security_statistics, update_followup_activity,
     read_analysis_run_file, restore_factory_configuration, validate_config_text,
-    write_config_text,
+    write_config_text, update_manual_technologies, technology_names,
+    inventory_technology_labels,
     update_inventory_preferences,
 )
 
 
 class DesktopConfigurationServicesTest(unittest.TestCase):
+    def test_manual_technology_is_saved_locally_and_labeled_distinctly(self) -> None:
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "projects.yaml"
+            path.write_text(
+                "schema_version: 1\ninventory:\n  projects:\n"
+                "    - id: workspace\n      path: /private/workspace\n"
+                "      languages:\n        - name: Python\n",
+                encoding="utf-8",
+            )
+            with patch("desktop.services.effective_config_path", return_value=path):
+                project = update_manual_technologies("/private/workspace", [{
+                    "name": "PostgreSQL", "category": "databases",
+                    "note": "User-declared use; version unverified",
+                }])
+            self.assertIn("PostgreSQL", technology_names(project))
+            self.assertIn("PostgreSQL [manual]", inventory_technology_labels(project))
+            self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
+            saved = yaml.safe_load(path.read_text(encoding="utf-8"))
+            self.assertEqual(
+                saved["inventory"]["projects"][0]["manual_technologies"][0]["category"],
+                "databases",
+            )
+
+    def test_report_reset_archives_current_files_and_preserves_logs(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            output = root / "output"
+            files = (
+                output / "followup.md", output / "check-summary.md",
+                output / "daily-advisory-check/2026-11-16.md",
+                output / "followup-archive/2026/11.md",
+            )
+            for path in files:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(path.name, encoding="utf-8")
+            log = output / "analysis-runs/2026/11/run/run.log"
+            log.parent.mkdir(parents=True)
+            log.write_text("previous run", encoding="utf-8")
+            config = {
+                "followup_file": "output/followup.md",
+                "summary_file": "output/check-summary.md",
+                "daily_directory": "output/daily-advisory-check",
+                "followup_archive_directory": "output/followup-archive",
+            }
+            with patch("desktop.services.ROOT", root), patch(
+                "desktop.services.reports_config", return_value=config,
+            ):
+                snapshot, count = archive_and_reset_reports()
+
+            self.assertEqual(count, 4)
+            self.assertTrue(snapshot.is_dir())
+            for path in files:
+                self.assertFalse(path.exists())
+                self.assertEqual(
+                    (snapshot / path.relative_to(output)).read_text(encoding="utf-8"),
+                    path.name,
+                )
+            self.assertEqual(log.read_text(encoding="utf-8"), "previous run")
+
+    def test_report_reset_rejects_a_file_outside_output(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "output").mkdir()
+            outside = root / "sensitive.md"
+            outside.write_text("keep", encoding="utf-8")
+            with patch("desktop.services.ROOT", root), patch(
+                "desktop.services.report_entries", return_value=[("Current summary", outside)],
+            ):
+                with self.assertRaises(ConfigurationError):
+                    archive_and_reset_reports()
+            self.assertEqual(outside.read_text(encoding="utf-8"), "keep")
+
+    def test_report_reset_rolls_back_when_a_move_fails(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            output = root / "output"
+            output.mkdir()
+            first = output / "followup.md"
+            second = output / "check-summary.md"
+            first.write_text("open issue", encoding="utf-8")
+            second.write_text("summary", encoding="utf-8")
+            replace = os.replace
+
+            def fail_second(source: Path, target: Path) -> None:
+                if Path(source) == second:
+                    raise OSError("simulated move failure")
+                replace(source, target)
+
+            with patch("desktop.services.ROOT", root), patch(
+                "desktop.services.report_entries",
+                return_value=[("Follow-up", first), ("Current summary", second)],
+            ), patch("desktop.services.os.replace", side_effect=fail_second):
+                with self.assertRaises(ConfigurationError):
+                    archive_and_reset_reports()
+            self.assertEqual(first.read_text(encoding="utf-8"), "open issue")
+            self.assertEqual(second.read_text(encoding="utf-8"), "summary")
+
     def test_analysis_logs_are_archived_read_and_deleted_as_one_safe_run(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory) / "analysis-runs"
@@ -166,6 +266,29 @@ class DesktopConfigurationServicesTest(unittest.TestCase):
         self.assertEqual(metadata["version"], "0.1.2")
         self.assertEqual(metadata["author"], "Graziano Ugenti <gucw@proton.me>")
         self.assertEqual(metadata["last_modified_year"], "2026")
+
+    def test_eula_acceptance_is_written_only_to_private_local_configuration(self) -> None:
+        with TemporaryDirectory() as directory:
+            config = Path(directory) / "config"
+            config.mkdir()
+            (config / "application.yaml").write_text(
+                "schema_version: 1\napplication:\n  developer_tools: false\n"
+                "  eula:\n    required_version: 1\n    accepted_version: null\n"
+                "    accepted_at_utc: null\n",
+                encoding="utf-8",
+            )
+            local = config / "local/application.yaml"
+            with patch("desktop.services.CONFIG_DIR", config), patch(
+                "desktop.services.LOCAL_CONFIG_DIR", config / "local",
+            ), patch("desktop.services.LOCAL_APPLICATION_CONFIG", local):
+                self.assertFalse(eula_accepted())
+                accept_eula()
+                self.assertTrue(eula_accepted())
+
+            stored = yaml.safe_load(local.read_text(encoding="utf-8"))
+            self.assertEqual(stored["application"]["eula"]["accepted_version"], "1")
+            self.assertTrue(stored["application"]["eula"]["accepted_at_utc"].endswith("Z"))
+            self.assertEqual(stat.S_IMODE(local.stat().st_mode), 0o600)
 
     def test_configuration_requires_schema_version_one(self) -> None:
         with self.assertRaises(ConfigurationError):

@@ -6,7 +6,10 @@ from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
 
-from scripts.inventory import build_inventory, discover_projects, iter_project_files, matches_exclude
+from scripts.inventory import (
+    build_inventory, discover_projects, iter_project_files, matches_exclude,
+    normalize_manual_technologies,
+)
 
 
 class ProjectRootExclusionsTest(unittest.TestCase):
@@ -53,6 +56,10 @@ class ProjectRootExclusionsTest(unittest.TestCase):
                     "projects": [{
                         "path": str(existing),
                         "advisory_checks": {"enabled": False, "preferred_ai": "claude"},
+                        "manual_technologies": [{
+                            "name": "PostgreSQL", "category": "databases",
+                            "note": "User-declared database",
+                        }],
                     }],
                 },
             }
@@ -72,6 +79,22 @@ class ProjectRootExclusionsTest(unittest.TestCase):
             self.assertEqual(by_id["new"]["advisory_checks"], {
                 "enabled": True, "preferred_ai": None,
             })
+            self.assertEqual(by_id["existing"]["manual_technologies"], [{
+                "name": "PostgreSQL", "category": "databases",
+                "note": "User-declared database",
+            }])
+            self.assertEqual(by_id["new"]["manual_technologies"], [])
+
+    def test_manual_technologies_reject_duplicates_and_control_characters(self) -> None:
+        with self.assertRaises(ValueError):
+            normalize_manual_technologies([
+                {"name": "PostgreSQL", "category": "databases"},
+                {"name": "postgresql", "category": "databases"},
+            ])
+        with self.assertRaises(ValueError):
+            normalize_manual_technologies([
+                {"name": "PostgreSQL\nsecret", "category": "databases"},
+            ])
 
 
 if __name__ == "__main__":

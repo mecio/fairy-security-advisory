@@ -39,18 +39,37 @@ user's own risk. To the maximum extent permitted by applicable law, the authors
 and contributors are not liable for losses, damages, service interruptions,
 security incidents, or other consequences arising from its use or misuse.
 
+The desktop application presents the versioned [end-user notice](EULA.md) on
+first launch and requires explicit acknowledgement before continuing. That
+local acknowledgement does not replace or restrict the AGPL license.
+
 ## Installation
 
 ### Requirements
 
-- Linux, macOS, or another environment with Python 3.11 or later;
+- Linux with Python 3.11 or later;
 - Git, when installing from a Git repository;
 - network access for advisory retrieval during a complete check;
 - at least one authenticated CLI agent: Codex or Claude Code; no IDE is
   required;
+- on Linux, `bubblewrap` for Codex and Claude command isolation, plus `socat`
+  for Claude's sandbox network relay; the preflight provides guided setup;
 - optional: OSV-Scanner, Trivy, and Docker;
 - optional desktop interface: PySide6 6.x, installed into the project virtual
   environment only after confirmation.
+
+Ubuntu 24.04 LTS is the project's primary tested Linux environment. Automated
+tests and desktop smoke checks have run there. Setup guidance for other Linux
+distributions is based on detected packages and sandbox capabilities, but has
+not been verified end to end on every distribution. In particular, the guided
+AppArmor installation still needs a complete user-side confirmation test.
+
+If you try fAIry on another Linux distribution, please share your experience
+through [GitHub Issues](https://github.com/mecio/fairy-security-advisory/issues).
+Include the distribution and version, desktop environment, which AI CLI you
+used, the preflight result, and any steps that failed. Remove local paths,
+project names, credentials, and security findings before posting logs or
+screenshots.
 
 ### Install the project
 
@@ -71,10 +90,10 @@ implementation in `scripts/fairy-security-advisory`, so the public command
 remains short while executable code stays under `scripts/`.
 
 Use option 2 to check Python, Git, configured paths, inventory freshness,
-optional scanners, installed AI agents, and their authentication state. If no
-supported agent is available, the launcher displays the official installation
-command and documentation. Use option 3 to initialize local configuration and
-option 6 to build the initial inventory.
+optional scanners, installed AI agents, authentication, and the Linux OS
+sandbox. If no supported agent is available, the launcher displays the official
+installation command and documentation. Use option 3 to initialize local
+configuration and option 6 to build the initial inventory.
 
 ### Supported AI agents
 
@@ -108,12 +127,25 @@ claude auth status
 The desktop **System status** page distinguishes `Missing` from
 `Login required` and provides a **Log in** button. It opens the official command
 in a visible terminal so browser/device authorization can complete normally.
+fAIry closes after the terminal opens; restart it when login is complete.
 Credentials, account identifiers, API keys, access tokens, and authentication
 output are handled and stored only by the provider CLI; fAIry records none of
 them and displays only the boolean authenticated/not-authenticated state.
 
 The requirements check verifies both command availability and authentication
-before allowing the analysis service or AI issue assistant to start.
+before allowing the analysis service or AI issue assistant to start. On Linux
+it also runs a harmless, read-only `bwrap` namespace probe. When Ubuntu's
+AppArmor user-namespace restriction blocks the probe, fAIry checks the Linux
+distribution before offering a repair. On Ubuntu 24.04 it proposes Ubuntu's
+packaged `bwrap-userns-restrict` profile and loads that profile alone. On other
+releases with an unresolved restriction it shows diagnostics and documentation
+without offering an unverified system change. It never disables AppArmor or the
+system-wide restriction automatically.
+The Ubuntu package is downloaded to a temporary directory so its other
+AppArmor profiles are not installed.
+See the official [Claude Code sandbox guide](https://code.claude.com/docs/en/sandboxing)
+and [Ubuntu AppArmor documentation](https://documentation.ubuntu.com/security/security-features/privilege-restriction/apparmor/)
+for the underlying platform behavior.
 
 ### Optional scanners
 
@@ -145,6 +177,14 @@ On first use, the launcher offers to install `desktop/requirements.txt` into
 the isolated `.venv`. It does not install graphical dependencies without
 confirmation. The same interface can be opened as menu option 12.
 
+Before the main window appears for the first time, the GUI displays
+[`EULA.md`](EULA.md). **Accept and continue** remains disabled until the user
+selects the acknowledgement checkbox. Acceptance version and UTC timestamp are
+stored only in the ignored `config/local/application.yaml`; no account identity
+or acceptance record is transmitted. Restoring that local application file to
+factory defaults, or increasing the required EULA version, causes the notice to
+appear again.
+
 The desktop application provides:
 
 - a security dashboard derived from ignored local reports, with activities
@@ -155,14 +195,17 @@ The desktop application provides:
 - dedicated Codex and Claude CLI account tabs with install, login, and refresh
   actions that never store provider credentials, plus local per-provider usage
   totals and the remaining Codex allowance when the installed CLI exposes it;
-- a technology inventory browser with local per-project advisory inclusion and
-  optional Codex/Claude preference;
+- a technology inventory browser with local per-project advisory inclusion,
+  optional Codex/Claude preference, and manual additions for technologies
+  missed by the scanner;
 - rendered daily reports and summary, plus an interactive follow-up table with
   primary-source links for advisories and CVEs;
 - a local year/month analysis-log archive with summary, event, routing, AI
   output, evidence viewing, and confirmed per-run deletion;
 - an AI issue assistant linked to one open follow-up ID and project at a time;
 - system and optional-tool status;
+- a Linux sandbox preflight with guided `bubblewrap`, `socat`, and AppArmor
+  configuration for Codex and Claude Code;
 - Linux application-menu integration with contextual Install/Remove actions;
 - an in-application User guide with searchable next/previous matches;
 - guided, explicitly confirmed installation actions for missing agents and
@@ -249,7 +292,7 @@ counterpart; when it is absent, the factory value is used.
 - `config/local/advisory-sources.yaml`, `reports.yaml`, `ai-agents.yaml`, and
   `backups.yaml`: private user overrides derived from the factory files;
 - `config/local/application.yaml`: private UI preferences, including the
-  `developer_tools` flag.
+  `developer_tools` flag and local EULA acceptance record.
 
 For the first run, select menu option 3. It creates the missing files under
 `config/local/`, copying the existing legacy project configuration when
@@ -305,6 +348,10 @@ selected when the complete analysis starts. An explicit Codex or Claude choice
 routes that project to the matching authenticated CLI. These settings are
 stored only in the ignored `config/local/projects.yaml` and survive inventory
 refreshes.
+Select a project and use **Edit technologies for selected project…** to add a
+technology with its category, optional version, and context. fAIry marks it as
+manual and preserves it across inventory refreshes. The AI uses it as a scope
+hint, then verifies actual use and version before assessing an advisory.
 
 Supported advisory source types are `html`, `rss`, `atom`, `json`, `api`, and
 `repository`. Each source declares its name, URL, category or filter,
@@ -432,7 +479,8 @@ creating local configuration, refreshing the inventory, or starting an AI
 analysis. The desktop System status page also provides an **Install…** button
 for missing agents and optional scanners. It displays the exact distribution-
 appropriate command first and runs it only after explicit approval in a visible
-terminal; **Copy command** is available for manual review and execution. No AI
+terminal; fAIry then closes automatically. **Copy command** is available for
+manual review and execution. No AI
 agent, scanner, or system package is installed silently.
 
 Before option 10 starts an analysis, the service verifies that:
@@ -495,16 +543,26 @@ The desktop **Logs** page browses these archives and can permanently delete one
 confirmed run at a time without affecting reports, follow-up, configuration, or
 scanned projects. Empty archive folders are removed automatically.
 
+In **Reports**, **Clear reports and follow-up…** moves current daily reports,
+summary, active follow-up, and closed-issue archives to a private snapshot below
+`output/report-resets/`. This empties the current report view so a complete AI
+check can rebuild it. The agent consults reset snapshots for previous issue
+states and stable IDs; the reset does not invalidate confirmed resolutions.
+Analysis logs, configuration, inventory, and scanned projects remain in place.
+
 Agent processes are detached from transient Codex IDE/session variables before
 launch. This lets a standalone Codex CLI create its own least-privilege sandbox
 even when fAIry was opened from an IDE-integrated agent terminal. Authentication
 and the user's normal Codex configuration are preserved.
 
-The Codex coordinator retains `workspace-write` isolation but receives outbound
+The Codex coordinator retains `workspace-write` isolation and receives outbound
 network access because advisory verification and scanner databases require it.
-This also avoids Linux Bubblewrap loopback setup failures on hosts that cannot
-create an isolated network namespace. fAIry never switches Codex to
-`danger-full-access`.
+Claude invocations started by fAIry receive strict per-process sandbox settings:
+the sandbox must be available and an operation cannot silently retry outside
+it. On Linux, both agents therefore depend on a working Bubblewrap namespace;
+the prerequisite check stops the run and presents AppArmor guidance when that
+boundary cannot be created. fAIry never switches Codex to
+`danger-full-access` or Claude to bypass-permissions mode.
 
 While an analysis is running, the desktop footer remains visible on every page
 and identifies the active provider and phase. The Run check page also shows
@@ -653,3 +711,7 @@ corresponding source as required by AGPLv3 section 13.
 Commercial use is permitted, but it does not remove the AGPL obligations.
 Third-party components remain subject to their own licenses; see
 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
+
+The first-run [EULA notice](EULA.md) summarizes the AGPL warranty disclaimer,
+liability limitation, and AI-processing risks; it does not add restrictions to
+the license.

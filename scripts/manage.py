@@ -75,6 +75,10 @@ try:
     from tool_installation import installation_plan, resolve_agent_executable
 except ImportError:
     from scripts.tool_installation import installation_plan, resolve_agent_executable
+try:
+    from sandbox_preflight import claude_sandbox_settings, print_sandbox_preflight
+except ImportError:
+    from scripts.sandbox_preflight import claude_sandbox_settings, print_sandbox_preflight
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -321,6 +325,10 @@ def check_prerequisites(provider: str | None = None) -> int:
     for scanner in ("osv-scanner", "trivy"):
         executable = shutil.which(scanner)
         print(f"{'OK  ' if executable else 'OPT '} {scanner}: {executable or 'not installed (optional)'}")
+
+    providers_for_sandbox = (provider,) if provider else tuple(AI_PROMPTS)
+    if not print_sandbox_preflight(providers_for_sandbox):
+        failures += 1
 
     if failures > 0:
         print("Prerequisites are incomplete. Follow the guidance above before starting the analysis.")
@@ -619,14 +627,26 @@ def validate_project_license() -> int:
     failures: list[str] = []
     license_path = ROOT / "LICENSE"
     readme_path = ROOT / "README.md"
+    eula_path = ROOT / "EULA.md"
     license_text = license_path.read_text(encoding="utf-8") if license_path.is_file() else ""
     readme_text = readme_path.read_text(encoding="utf-8") if readme_path.is_file() else ""
+    eula_text = eula_path.read_text(encoding="utf-8") if eula_path.is_file() else ""
     if "GNU AFFERO GENERAL PUBLIC LICENSE" not in license_text:
         failures.append("LICENSE is not the canonical GNU AGPL text")
     if "AGPL-3.0-or-later" not in readme_text:
         failures.append("README does not declare AGPL-3.0-or-later")
     if "[MIT License](LICENSE)" in readme_text:
         failures.append("README still links the project LICENSE as MIT")
+    if "AGPL-3.0-or-later" not in eula_text or "provided **as is**" not in eula_text.casefold():
+        failures.append("EULA does not declare the AGPL relationship and as-is disclaimer")
+    factory_application = safe_load_yaml(ROOT / "config/application.yaml")
+    required_eula = str(
+        ((factory_application.get("application", {}) or {}).get("eula", {}) or {}).get(
+            "required_version", "",
+        )
+    )
+    if not required_eula or f"EULA version: {required_eula}" not in eula_text:
+        failures.append("EULA.md version does not match config/application.yaml")
     metadata = safe_load_yaml(ROOT / "VERSION.yaml")
     for key in ("name", "version", "author", "last_modified_year", "license"):
         if metadata.get(key) in (None, ""):
@@ -642,13 +662,16 @@ def validate_project_license() -> int:
         "desktop/__init__.py",
         "desktop/__main__.py",
         "desktop/app.py",
+        "desktop/eula_dialog.py",
         "desktop/main_window.py",
         "desktop/services.py",
+        "scripts/sandbox_preflight.py",
         "tests/test_desktop_services.py",
         "tests/test_desktop_ui.py",
         "tests/test_analysis_plan.py",
         "tests/test_inventory.py",
         "tests/test_manage.py",
+        "tests/test_sandbox_preflight.py",
     ):
         text = (ROOT / relative).read_text(encoding="utf-8")
         if "SPDX-License-Identifier: AGPL-3.0-or-later" not in text:
@@ -835,6 +858,9 @@ def consolidation_prompt(
         f"projects assigned to {provider} directly. Read and critically verify the "
         "read-only dossiers produced by other providers, deduplicate all findings, then "
         "update the canonical daily report, summary, follow-up, and archive exactly once. "
+        "If output/report-resets/ has snapshots, consult their follow-up and "
+        "closed-issue archives, newest first, for historical status and stable IDs; a reset is "
+        "not new evidence that a previously resolved issue is vulnerable again. "
         "OSV-Scanner and Trivy may be used only against paths in the selected groups. "
         "Record provider/model routing and any failed or missing dossier as a limitation.\n\n"
         f"Analysis plan: {plan_path}\nOther-provider dossiers:\n{dossier_lines}\n\n"
@@ -917,11 +943,15 @@ def ai_command(
     if non_interactive:
         permission_mode = "plan" if read_only else "auto"
         return [
-            executable, "--print", "--model", model,
+            executable, "--settings", claude_sandbox_settings(),
+            "--print", "--model", model,
             "--permission-mode", permission_mode, "--permission-prompts", "none",
             "--output-format", "stream-json", "--verbose", prompt,
         ]
-    return [executable, "--model", model, prompt]
+    return [
+        executable, "--settings", claude_sandbox_settings(),
+        "--model", model, prompt,
+    ]
 
 
 def prepare_analysis_service(

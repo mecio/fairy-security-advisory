@@ -103,6 +103,10 @@ directly affect web-server code.
 
 ## Local inventory
 
+Per-project `manual_technologies` in local inventory are user-declared scope
+hints, not scanner findings or verified installed and production versions. Use
+them to look for relevant advisories, then verify applicability independently.
+
 The detected project inventory is environment-derived data and belongs only in
 the ignored `config/local/projects.yaml`. Never copy local project names,
 paths, versions, production state, or findings into versioned instruction or

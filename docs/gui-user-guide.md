@@ -43,6 +43,22 @@ environment belongs only to fAIry and does not modify Python environments in
 the projects being scanned. The same desktop action is also available from the
 interactive command-line menu.
 
+### First-run EULA acknowledgement
+
+Before creating the main window for the first time, fAIry displays the complete
+versioned end-user notice. Read the scrollable text carefully. It explains that
+the software and its security conclusions are provided **as is**, that authors
+and contributors disclaim liability to the extent permitted by law, and that
+AI-assisted features can send selected evidence to the provider chosen by the
+user.
+
+The green **Accept and continue** button is disabled until the acknowledgement
+checkbox is selected. Choosing **Exit** closes the program without recording an
+acceptance. Acceptance stores only the notice version and a UTC timestamp in
+`config/local/application.yaml`; it does not transmit your identity or alter
+the AGPL license. The notice is shown again after a required EULA version change
+or after the local Application configuration is restored to factory defaults.
+
 On Linux, install a per-user application-menu shortcut and the square fAIry
 icon with menu option 17 or:
 
@@ -296,8 +312,8 @@ The Technology inventory page shows the structured inventory stored in local
 configuration. Each row identifies a detected project, its probable roles, and
 technologies supported by file, manifest, lockfile, or configuration evidence.
 Roles such as frontend, backend, infrastructure, or mixed are classification
-aids rather than access permissions. Technical discovery fields are read-only;
-only the local advisory selection and AI preference can be changed here.
+aids rather than access permissions. Scanner findings remain read-only. You can
+also add, edit, or remove separate manual technologies for a selected project.
 
 Use the checkbox in **Check** to decide whether a project belongs to the active
 advisory-analysis scope. A cleared checkbox excludes that project from advisory
@@ -310,6 +326,16 @@ the coordinator selected in Run check. An explicit Codex or Claude choice
 routes that project to the matching CLI and to that provider's model in the
 selected profile. Click **Save project choices** to write these choices to
 ignored local configuration.
+
+Select a project and open **Edit technologies for selected project…** to add a
+technology the scanner missed. Choose its category and optionally enter a
+version and context or evidence. For example, a database used by the project
+can be added under **Database** even when no manifest names it. The dialog
+shows scanner findings separately; manual entries appear in the inventory
+column with a **[manual]** marker. Use **Add or update**, **Remove selected**,
+then **Save changes**. A manual version is a user statement until checked
+against the environment; it never proves the version running in production.
+Only the Git-ignored `config/local/projects.yaml` is updated.
 
 The inventory can include languages and versions, frameworks, runtimes,
 package manifests, lockfiles, databases, web servers, reverse proxies,
@@ -327,8 +353,8 @@ changing exclusions, or making significant dependency changes. The refresh:
 4. writes the resulting structured inventory only to ignored local
    configuration.
 
-Refreshing preserves saved project checkboxes and preferred-AI choices for
-projects that are detected at the same path. Newly discovered projects are
+Refreshing preserves saved project checkboxes, preferred-AI choices, and manual
+technologies for projects detected at the same path. Newly discovered projects are
 selected by default and use **-** as their AI preference.
 
 The scanner does not update dependencies, run project installers, or rewrite
@@ -349,6 +375,17 @@ evidence, recommended actions, open work, and incomplete controls. The current
 summary provides a shorter operational view and check history. Both are
 rendered read-only in the desktop interface; deterministic processes update the
 underlying ignored Markdown files.
+
+**Clear reports and follow-up…** prepares a fresh verification. After an
+explicit confirmation, it moves the current summary, daily reports, active
+follow-up, and closed-issue archives into a private timestamped directory under
+`output/report-resets/`. The Reports view and dashboard then start empty. The
+next complete AI check rebuilds the current files from the selected inventory
+and advisory evidence. The agent consults reset snapshots for earlier
+status decisions and stable IDs; clearing the view alone is not evidence that
+a resolved issue has become vulnerable again. Analysis logs, configuration,
+inventory, and scanned projects are preserved. The action refuses to reset
+files while an analysis or AI conversation is running.
 
 ### Active follow-up
 
@@ -434,6 +471,10 @@ from Git. Issue context and user messages are sent to the selected external AI
 provider, so never enter passwords, API keys, tokens, customer data, or other
 secrets in the chat.
 
+Before sending issue context, the assistant runs the same provider-specific OS
+sandbox preflight as the complete analysis. If it fails, no message is appended
+or transmitted and the GUI offers the guided sandbox configuration.
+
 ## Running security checks
 
 The Run security checks page contains deterministic preparation commands and
@@ -443,7 +484,10 @@ execution mode before starting the full analysis.
 ### Check prerequisites
 
 **Check prerequisites** verifies that required commands, agent authentication,
-configured project roots, and local inventory are usable. OSV-Scanner and Trivy
+configured project roots, local inventory, and the operating-system sandbox are
+usable. On Linux it checks `bubblewrap`, checks `socat` when Claude is involved,
+reads the Ubuntu AppArmor user-namespace state, and performs a harmless
+read-only namespace probe. OSV-Scanner and Trivy
 are optional: when absent, fAIry reports the limitation and displays reviewed
 Linux installation commands but never installs them automatically during a
 security check.
@@ -451,6 +495,15 @@ security check.
 A failed prerequisite prevents the complete analysis from starting. Correct
 the reported item, refresh inventory or authentication when appropriate, and
 run the check again.
+
+If Ubuntu AppArmor blocks Bubblewrap, fAIry checks the distribution and
+release. On Ubuntu 24.04, it offers the Ubuntu packaged
+`bwrap-userns-restrict` profile and loads only that profile. It downloads the
+Ubuntu package into a temporary directory and extracts that single profile;
+the `apparmor-profiles` package itself is not installed. Check the package
+manager summary before approval. On other restricted releases, fAIry shows diagnostics
+and documentation but disables the unverified setup command. It does not set
+`kernel.apparmor_restrict_unprivileged_userns=0`.
 
 ### Check sources
 
@@ -478,6 +531,12 @@ the matching model in the selected profile. The confirmation dialog shows the
 project count for each provider, excluded projects, and models before anything
 starts. Every required CLI must be installed and authenticated.
 
+Codex runs under its configured read-only or workspace-write sandbox. fAIry
+starts Claude with strict per-process sandbox settings in addition to its
+permission mode: sandbox availability is mandatory and failed commands cannot
+silently retry without isolation. On Linux both agents therefore require the
+Bubblewrap preflight to pass.
+
 The Run check page keeps this routing rule visible below the agent selectors so
 changing the coordinator is not mistaken for overriding explicit per-project
 Inventory preferences.
@@ -501,8 +560,8 @@ processes. It keeps normal account authentication and user configuration. This
 prevents the standalone CLI from being mistaken for a nested IDE tool call.
 The Codex coordinator uses `workspace-write` with outbound network access for
 advisory sources and scanner databases; it does not use `danger-full-access`.
-This mode is also compatible with Linux systems where Bubblewrap cannot create
-an isolated loopback interface.
+If Bubblewrap cannot create its namespace, the preflight stops the run instead
+of weakening that boundary.
 
 The complete workflow asks the agent to:
 
@@ -569,10 +628,21 @@ possible states are:
   documented limitation.
 - **Login required**: an AI CLI exists but is not authenticated.
 - **Not created**: local configuration or inventory still needs initialization.
+- **Action required**: the Linux AI sandbox cannot start until the displayed
+  dependency or AppArmor issue is corrected.
 
 The Details column shows non-secret diagnostic information such as executable
 location, inventory age, or local configuration path. The Action column offers
 only operations relevant to the current state.
+
+The **AI OS sandbox** row summarizes the actual namespace probe used for Codex
+and Claude. When it is not ready, **Configure…** explains the change, exposes
+the complete command in a readable panel. The upper button row opens Claude's
+sandbox guide or Ubuntu's AppArmor guide. The lower row copies the command,
+cancels, or starts configuration in a visible terminal. No privileged command
+runs merely by opening the dialog. Once the terminal opens, fAIry closes
+automatically. Restart fAIry after the command finishes, refresh System status,
+and confirm that the row becomes **Ready**.
 
 On Linux, the **Linux desktop launcher** row reports whether fAIry is registered
 in the current user's application menu. **Install** creates the same launcher
@@ -584,8 +654,9 @@ entry and copied icon, not the project, configuration, reports, or backups.
 terminal. The terminal remains visible so package-manager messages, password
 prompts, and failures are not hidden. **Log in** similarly opens `codex login`
 or `claude auth login`; browser or device authorization remains entirely under
-provider control. After the external operation, return to fAIry and refresh the
-status.
+provider control. fAIry closes after the terminal opens; restart it after the
+external operation and refresh the status. If an analysis or AI conversation is
+running, finish or stop it before opening a terminal.
 
 fAIry checks only whether authentication is usable. It does not copy provider
 credential files into its configuration, backups, reports, or usage history.
@@ -636,6 +707,11 @@ The displayed license applies to the project source code and distribution. The
 software is provided without warranty; users remain responsible for validating
 findings, protecting local data, and deciding whether and how to apply security
 changes.
+
+The first-run EULA is a readable acknowledgement of the AGPL warranty and
+liability provisions plus the risks of external AI processing. Its acceptance
+record is local and is not an additional restriction on copying, modifying, or
+redistributing the AGPL-covered software.
 
 ## Privacy and local data
 
@@ -704,6 +780,14 @@ Provider allowance and authentication are different checks. An authenticated
 CLI can still be unavailable because its usage limit has been reached. Codex
 allowance may appear directly in the GUI; for Claude Code, run `/usage` in an
 interactive Claude session.
+
+If the error contains `bwrap`, `setting up uid map`, `RTM_NEWADDR`, or
+`Operation not permitted`, open **System status** and inspect **AI OS sandbox**.
+Use **Configure…** to review the distribution-specific setup and the required
+`bubblewrap`/`socat` packages. When the installer cannot identify a documented
+repair, its terminal action remains disabled. Refresh status after
+the terminal command completes; do not start a complete analysis until the
+namespace probe reports **Ready**.
 
 ### A scanner is missing
 

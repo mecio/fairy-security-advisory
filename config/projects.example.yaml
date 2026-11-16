@@ -27,4 +27,8 @@ inventory:
   # preferred_ai may be null, codex, or claude. Null inherits the coordinator
   # selected at launch; explicit providers route that project to the matching CLI.
   # These choices survive inventory refreshes.
+  # The GUI can also add local-only manual_technologies to detected projects:
+  # manual_technologies: [{name: PostgreSQL, category: databases}]
+  # They are user-declared context, not verified installed or production versions,
+  # and survive inventory refreshes for projects detected at the same path.
   projects: []

@@ -14,6 +14,8 @@ try:
     from PySide6.QtCore import Qt
     from PySide6.QtWidgets import QApplication, QComboBox, QLabel, QMessageBox, QPushButton
     from desktop import services
+    from desktop.eula_dialog import EulaDialog
+    from desktop.inventory_technologies_dialog import InventoryTechnologiesDialog
     from desktop.main_window import BarChartCard, MainWindow
 except ImportError:
     QApplication = None
@@ -23,10 +25,46 @@ except ImportError:
     QPushButton = None
     QUrl = None
     Qt = None
+    EulaDialog = None
+    InventoryTechnologiesDialog = None
 
 
 @unittest.skipUnless(QApplication is not None, "optional PySide6 dependency is not installed")
 class DesktopWindowTest(unittest.TestCase):
+    def test_inventory_manual_technology_dialog_adds_and_edits_an_entry(self) -> None:
+        application = QApplication.instance() or QApplication([])
+        dialog = InventoryTechnologiesDialog({"id": "workspace"}, ["Python"])
+        dialog.name.setText("PostgreSQL")
+        dialog.category.setCurrentIndex(dialog.category.findData("databases"))
+        dialog.note.setText("User-declared database")
+        dialog._add_or_update()
+        self.assertEqual(dialog.manual, [{
+            "name": "PostgreSQL", "category": "databases",
+            "note": "User-declared database",
+        }])
+        self.assertEqual(dialog.table.currentRow(), -1)
+        dialog.table.setCurrentCell(0, 0)
+        dialog.version.setText("unverified")
+        dialog._add_or_update()
+        self.assertEqual(dialog.manual[0]["version"], "unverified")
+        dialog.close()
+        dialog.deleteLater()
+        application.processEvents()
+
+    def test_first_run_eula_requires_explicit_checkbox_acceptance(self) -> None:
+        application = QApplication.instance() or QApplication([])
+        dialog = EulaDialog("# Notice\n\nProvided **as is**.", "1")
+        self.assertFalse(dialog.accept_button.isEnabled())
+        dialog.acceptance.setChecked(True)
+        application.processEvents()
+        self.assertTrue(dialog.accept_button.isEnabled())
+        dialog.acceptance.setChecked(False)
+        application.processEvents()
+        self.assertFalse(dialog.accept_button.isEnabled())
+        dialog.close()
+        dialog.deleteLater()
+        application.processEvents()
+
     def test_ai_analysis_progress_is_visible_across_pages(self) -> None:
         application = QApplication.instance() or QApplication([])
         window = MainWindow()
@@ -56,6 +94,73 @@ class DesktopWindowTest(unittest.TestCase):
         })
         self.assertEqual(window.analysis_project_progress.value(), 5)
         self.assertIn("completed", window.analysis_activity_label.text().casefold())
+        window.close()
+        window.deleteLater()
+        application.processEvents()
+
+    def test_sandbox_terminal_handoff_closes_gui_only_after_successful_launch(self) -> None:
+        application = QApplication.instance() or QApplication([])
+        plan = {
+            "command": "printf ready", "supported": True, "note": "Test command.",
+            "claude_documentation": "https://example.test/claude",
+            "ubuntu_documentation": "https://example.test/ubuntu",
+        }
+        with patch("desktop.main_window.services.sandbox_configuration_plan", return_value=plan), patch(
+            "desktop.main_window.SandboxSetupDialog.exec",
+            return_value=1,
+        ), patch(
+            "desktop.main_window.shutil.which",
+            return_value="/usr/bin/gnome-terminal",
+        ), patch("desktop.main_window.QProcess.startDetached", return_value=(True, 123)) as launch:
+            window = MainWindow()
+            window.show()
+            application.processEvents()
+            window.configure_ai_sandbox()
+            self.assertFalse(window.isVisible())
+            launch.assert_called_once()
+            window.deleteLater()
+            application.processEvents()
+
+        with patch("desktop.main_window.services.sandbox_configuration_plan", return_value=plan), patch(
+            "desktop.main_window.SandboxSetupDialog.exec",
+            return_value=1,
+        ), patch(
+            "desktop.main_window.shutil.which",
+            return_value="/usr/bin/gnome-terminal",
+        ), patch(
+            "desktop.main_window.QProcess.startDetached", return_value=(False, 0),
+        ), patch("desktop.main_window.QMessageBox.critical"):
+            window = MainWindow()
+            window.show()
+            application.processEvents()
+            window.configure_ai_sandbox()
+            self.assertTrue(window.isVisible())
+            window.close()
+            window.deleteLater()
+            application.processEvents()
+
+    def test_report_reset_requires_confirmation_and_refreshes_the_view(self) -> None:
+        application = QApplication.instance() or QApplication([])
+        window = MainWindow()
+        with patch(
+            "desktop.main_window.QMessageBox.question",
+            return_value=QMessageBox.StandardButton.No,
+        ), patch("desktop.main_window.services.archive_and_reset_reports") as reset:
+            window.reset_reports_for_recheck()
+            reset.assert_not_called()
+
+        with patch(
+            "desktop.main_window.QMessageBox.question",
+            return_value=QMessageBox.StandardButton.Yes,
+        ), patch(
+            "desktop.main_window.services.archive_and_reset_reports",
+            return_value=(Path("/tmp/report-reset-test"), 2),
+        ) as reset, patch(
+            "desktop.main_window.QMessageBox.information",
+        ), patch.object(window, "refresh_all") as refresh:
+            window.reset_reports_for_recheck()
+            reset.assert_called_once()
+            refresh.assert_called_once()
         window.close()
         window.deleteLater()
         application.processEvents()
@@ -110,6 +215,9 @@ class DesktopWindowTest(unittest.TestCase):
         ), patch(
             "desktop.main_window.services.ai_model",
             side_effect=lambda provider, _profile: f"{provider}-model",
+        ), patch(
+            "desktop.main_window.services.sandbox_preflight",
+            return_value={"ready": True},
         ), patch(
             "desktop.main_window.QMessageBox.question",
             return_value=QMessageBox.StandardButton.Yes,
@@ -235,6 +343,7 @@ class DesktopWindowTest(unittest.TestCase):
         self.assertEqual(buttons["Save settings"].property("variant"), "success")
         self.assertEqual(buttons["Restore factory defaults…"].property("variant"), "danger")
         self.assertEqual(buttons["Import backup…"].property("variant"), "danger")
+        self.assertEqual(buttons["Clear reports and follow-up…"].property("variant"), "danger")
         self.assertEqual(buttons["Stop"].property("variant"), "danger")
         self.assertEqual(buttons["Send to AI"].property("variant"), "ai")
         self.assertFalse(buttons["Initialize local configuration"].isHidden())

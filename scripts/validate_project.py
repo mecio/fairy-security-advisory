@@ -25,6 +25,10 @@ try:
     from configuration import effective_config_path
 except ImportError:
     from scripts.configuration import effective_config_path
+try:
+    from inventory import normalize_manual_technologies
+except ImportError:
+    from scripts.inventory import normalize_manual_technologies
 
 
 SOURCE_TYPES = {"html", "rss", "atom", "json", "api", "repository"}
@@ -104,11 +108,26 @@ def main() -> int:
     application_config = load_config_file(
         effective_config_path(config_dir, "application.yaml"), errors,
     )
+    factory_application_config = load_config_file(config_dir / "application.yaml", errors)
     developer_tools = (application_config.get("application", {}) or {}).get(
         "developer_tools", False,
     )
     if not isinstance(developer_tools, bool):
         fail("application.developer_tools must be a boolean", errors)
+    eula = (factory_application_config.get("application", {}) or {}).get("eula", {})
+    if not isinstance(eula, dict):
+        fail("application.eula must be a mapping", errors)
+    else:
+        if eula.get("required_version") in {None, ""}:
+            fail("application.eula.required_version is required", errors)
+        if eula.get("accepted_version") is not None and not isinstance(
+            eula.get("accepted_version"), (str, int),
+        ):
+            fail("application.eula.accepted_version must be null, a string, or an integer", errors)
+        if eula.get("accepted_at_utc") is not None and not isinstance(
+            eula.get("accepted_at_utc"), str,
+        ):
+            fail("application.eula.accepted_at_utc must be null or a string", errors)
     if not projects_config.get("project_roots"):
         fail("project_roots is empty", errors)
     for index, project_root in enumerate(projects_config.get("project_roots", []), start=1):
@@ -126,6 +145,10 @@ def main() -> int:
         if not isinstance(project, dict):
             fail(f"inventory project {index}: must be a mapping", errors)
             continue
+        try:
+            normalize_manual_technologies(project.get("manual_technologies", []))
+        except ValueError as error:
+            fail(f"inventory project {index}: {error}", errors)
         advisory_checks = project.get("advisory_checks", {})
         if not isinstance(advisory_checks, dict):
             fail(f"inventory project {index}: advisory_checks must be a mapping", errors)

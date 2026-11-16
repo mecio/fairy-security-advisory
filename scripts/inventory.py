@@ -58,6 +58,11 @@ MANIFEST_NAMES = PROJECT_MARKERS | {
     "composer.lock", "package-lock.json", "npm-shrinkwrap.json", "yarn.lock",
     "pnpm-lock.yaml", "Pipfile.lock", "Cargo.lock", "Gemfile.lock", "go.sum",
 }
+MANUAL_TECH_CATEGORIES = (
+    "languages", "runtimes", "frameworks_and_tooling", "databases",
+    "web_servers_and_proxies", "containers", "operating_systems", "ci_cd",
+    "infrastructure_as_code", "virtualization_and_services", "other",
+)
 
 EXT_LANG = {
     ".php": "PHP", ".py": "Python", ".js": "JavaScript", ".jsx": "JavaScript/JSX",
@@ -92,6 +97,42 @@ def safe_load_yaml(path: Path) -> dict[str, Any]:
     if not isinstance(data, dict):
         raise ValueError(f"Invalid configuration: {path}")
     return data
+
+
+def normalize_manual_technologies(values: Any) -> list[dict[str, str]]:
+    """Validate user-declared technologies without treating them as scan evidence."""
+    if not isinstance(values, list):
+        raise ValueError("manual_technologies must be a list")
+    normalized: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for index, value in enumerate(values, start=1):
+        if not isinstance(value, dict):
+            raise ValueError(f"manual technology {index} must be a mapping")
+        name = value.get("name")
+        category = value.get("category")
+        version = value.get("version", "")
+        note = value.get("note", "")
+        if not isinstance(name, str) or not name.strip() or len(name.strip()) > 120:
+            raise ValueError(f"manual technology {index} needs a name of at most 120 characters")
+        if not isinstance(category, str) or category not in MANUAL_TECH_CATEGORIES:
+            raise ValueError(f"manual technology {index} has an unsupported category")
+        if not isinstance(version, str) or len(version.strip()) > 120:
+            raise ValueError(f"manual technology {index} has an invalid version")
+        if not isinstance(note, str) or len(note.strip()) > 500:
+            raise ValueError(f"manual technology {index} has an invalid note")
+        if any(ord(character) < 32 for character in name + version + note):
+            raise ValueError(f"manual technology {index} contains a control character")
+        key = (category, name.strip().casefold())
+        if key in seen:
+            raise ValueError(f"duplicate manual technology: {name.strip()}")
+        seen.add(key)
+        item = {"name": name.strip(), "category": category}
+        if version.strip():
+            item["version"] = version.strip()
+        if note.strip():
+            item["note"] = note.strip()
+        normalized.append(item)
+    return normalized
 
 
 def atomic_write_yaml(path: Path, data: dict[str, Any]) -> None:
@@ -409,12 +450,16 @@ def analyze_project(
 def build_inventory(config: dict[str, Any]) -> list[dict[str, Any]]:
     limit = int(config.get("inventory", {}).get("max_files_per_project", 20000))
     previous_preferences: dict[str, dict[str, Any]] = {}
+    previous_manual: dict[str, list[dict[str, str]]] = {}
     for previous in config.get("inventory", {}).get("projects", []):
         if not isinstance(previous, dict) or not previous.get("path"):
             continue
         settings = previous.get("advisory_checks", {})
         if isinstance(settings, dict):
             previous_preferences[str(previous["path"])] = settings
+        previous_manual[str(previous["path"])] = normalize_manual_technologies(
+            previous.get("manual_technologies", []),
+        )
     projects: dict[Path, tuple[Path, tuple[str, ...]]] = {}
     for item in config.get("project_roots", []):
         if not isinstance(item, dict) or not item.get("enabled", True):
@@ -435,6 +480,7 @@ def build_inventory(config: dict[str, Any]) -> list[dict[str, Any]]:
             "enabled": bool(previous.get("enabled", True)),
             "preferred_ai": preferred_ai if preferred_ai in {"codex", "claude"} else None,
         }
+        result["manual_technologies"] = previous_manual.get(str(project), [])
         inventory.append(result)
     return inventory
 

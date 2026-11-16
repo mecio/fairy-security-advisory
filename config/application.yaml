@@ -4,3 +4,9 @@ schema_version: 1
 # Git-ignored config/local/application.yaml override.
 application:
   developer_tools: false
+  eula:
+    # Increment this value only when the versioned EULA.md notice changes in a
+    # way that requires users to acknowledge it again. Acceptance is local.
+    required_version: 1
+    accepted_version: null
+    accepted_at_utc: null

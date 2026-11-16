@@ -31,15 +31,21 @@ from scripts.config_backup import (
 )
 from scripts.ai_usage import codex_rate_limits, summarize_usage
 from scripts.analysis_plan import build_analysis_plan, plan_summary, required_providers
+from scripts.inventory import normalize_manual_technologies
 from scripts.desktop_integration import (
     desktop_entry_installed, install_linux_desktop_entry, integration_paths,
     remove_linux_desktop_entry,
+)
+from scripts.sandbox_preflight import (
+    CLAUDE_SANDBOX_DOCUMENTATION, UBUNTU_APPARMOR_DOCUMENTATION,
+    claude_sandbox_settings, sandbox_preflight, sandbox_setup_plan,
 )
 
 
 ROOT = Path(__file__).resolve().parent.parent
 CONFIG_DIR = ROOT / "config"
 VERSION_FILE = ROOT / "VERSION.yaml"
+EULA_FILE = ROOT / "EULA.md"
 LOCAL_CONFIG_DIR = CONFIG_DIR / "local"
 LOCAL_CONFIG = LOCAL_CONFIG_DIR / "projects.yaml"
 LOCAL_APPLICATION_CONFIG = LOCAL_CONFIG_DIR / "application.yaml"
@@ -64,6 +70,48 @@ def project_metadata() -> dict[str, Any]:
         "last_modified_year": str(data.get("last_modified_year", "unknown")),
         "license": str(data.get("license", "unknown")),
     }
+
+
+def eula_text() -> str:
+    """Return the versioned end-user notice displayed before the first GUI run."""
+    if not EULA_FILE.is_file():
+        raise ConfigurationError("EULA.md is missing; the desktop application cannot start.")
+    return EULA_FILE.read_text(encoding="utf-8")
+
+
+def required_eula_version() -> str:
+    data = load_yaml(CONFIG_DIR / "application.yaml")
+    application = data.get("application", {}) or {}
+    eula = application.get("eula", {}) if isinstance(application, dict) else {}
+    version = eula.get("required_version") if isinstance(eula, dict) else None
+    if version in {None, ""}:
+        raise ConfigurationError("The factory EULA version is not configured.")
+    return str(version)
+
+
+def eula_accepted() -> bool:
+    data = load_yaml(effective_config_path(CONFIG_DIR, "application.yaml"))
+    application = data.get("application", {}) or {}
+    eula = application.get("eula", {}) if isinstance(application, dict) else {}
+    accepted = eula.get("accepted_version") if isinstance(eula, dict) else None
+    return str(accepted) == required_eula_version()
+
+
+def accept_eula() -> None:
+    """Record acceptance only in the private local application override."""
+    source = effective_config_path(CONFIG_DIR, "application.yaml")
+    data = load_yaml(source)
+    data.setdefault("schema_version", 1)
+    application = data.setdefault("application", {})
+    if not isinstance(application, dict):
+        raise ConfigurationError("application must be a YAML mapping.")
+    eula = application.setdefault("eula", {})
+    if not isinstance(eula, dict):
+        raise ConfigurationError("application.eula must be a YAML mapping.")
+    eula["required_version"] = required_eula_version()
+    eula["accepted_version"] = required_eula_version()
+    eula["accepted_at_utc"] = dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z")
+    write_config_text(LOCAL_APPLICATION_CONFIG, dump_config_data(data), private=True)
 
 
 def load_yaml(path: Path) -> dict[str, Any]:
@@ -182,6 +230,33 @@ def update_inventory_preferences(preferences: dict[str, dict[str, Any]]) -> None
             "preferred_ai": preferred_ai or None,
         }
     write_config_text(config_path, dump_config_data(data), private=True)
+
+
+def update_manual_technologies(
+    project_path: str, values: list[dict[str, str]],
+) -> dict[str, Any]:
+    """Save user-declared technology context only in the ignored inventory."""
+    config_path = effective_config_path(CONFIG_DIR, "projects.example.yaml")
+    if config_path == EXAMPLE_CONFIG:
+        raise ConfigurationError("Initialize local configuration before editing technologies.")
+    try:
+        manual = normalize_manual_technologies(values)
+    except ValueError as error:
+        raise ConfigurationError(str(error)) from error
+    data = load_yaml(config_path)
+    projects = data.get("inventory", {}).get("projects", [])
+    if not isinstance(projects, list):
+        raise ConfigurationError("The local inventory project list is invalid.")
+    matches = [
+        project for project in projects
+        if isinstance(project, dict) and str(project.get("path", "")) == project_path
+    ]
+    if len(matches) != 1:
+        raise ConfigurationError("The selected project is no longer unique in local inventory. Reload it.")
+    project = matches[0]
+    project["manual_technologies"] = manual
+    write_config_text(config_path, dump_config_data(data), private=True)
+    return project
 
 
 def analysis_routing(default_provider: str) -> dict[str, Any]:
@@ -331,7 +406,29 @@ def technology_names(project: dict[str, Any]) -> list[str]:
                 name = value.get("name") or value.get("technology")
                 if name:
                     technologies.add(str(name))
+    for value in project.get("manual_technologies", []):
+        if isinstance(value, dict) and isinstance(value.get("name"), str):
+            technologies.add(value["name"])
     return sorted(technologies, key=str.casefold)
+
+
+def inventory_technology_labels(project: dict[str, Any]) -> list[str]:
+    """Show user declarations distinctly from scanner findings in the GUI."""
+    detected = technology_names({**project, "manual_technologies": []})
+    manual = {
+        value["name"].casefold(): value["name"]
+        for value in project.get("manual_technologies", [])
+        if isinstance(value, dict) and isinstance(value.get("name"), str)
+    }
+    detected_keys = {name.casefold() for name in detected}
+    labels = [
+        f"{name} [detected + manual]" if name.casefold() in manual else name
+        for name in detected
+    ]
+    labels.extend(
+        f"{name} [manual]" for key, name in manual.items() if key not in detected_keys
+    )
+    return sorted(labels, key=str.casefold)
 
 
 def reports_config() -> dict[str, Any]:
@@ -360,6 +457,58 @@ def report_entries() -> list[tuple[str, Path]]:
             for path in sorted(daily.glob("*.md"), reverse=True)
         )
     return entries
+
+
+def archive_and_reset_reports() -> tuple[Path, int]:
+    """Move visible local reports to a private snapshot for a fresh check."""
+    output = ROOT / "output"
+    if output.is_symlink() or not output.is_dir():
+        raise ConfigurationError("The local output directory is missing or is a symlink.")
+    output_root = output.resolve()
+    reset_root = output_root / "report-resets"
+    if reset_root.is_symlink():
+        raise ConfigurationError("The report reset directory must not be a symlink.")
+
+    sources: list[tuple[Path, Path]] = []
+    seen: set[Path] = set()
+    for _label, path in report_entries():
+        if path.is_symlink():
+            raise ConfigurationError(f"Refusing to reset a symlinked report: {path}")
+        resolved = path.resolve()
+        try:
+            relative = resolved.relative_to(output_root)
+        except ValueError as error:
+            raise ConfigurationError(
+                f"Report reset is restricted to the Git-ignored output directory: {path}"
+            ) from error
+        if relative.parts[0] == "report-resets":
+            raise ConfigurationError("A reset snapshot cannot be reset as an active report.")
+        if resolved not in seen:
+            sources.append((resolved, relative))
+            seen.add(resolved)
+    if not sources:
+        raise ConfigurationError("There are no local reports or follow-up files to reset.")
+
+    reset_root.mkdir(mode=0o700, exist_ok=True)
+    timestamp = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    snapshot = Path(tempfile.mkdtemp(prefix=f"{timestamp}-", dir=reset_root))
+    moved: list[tuple[Path, Path]] = []
+    try:
+        for source, relative in sources:
+            target = snapshot / relative
+            target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            os.replace(source, target)
+            moved.append((source, target))
+    except OSError as error:
+        rollback_errors = []
+        for source, target in reversed(moved):
+            try:
+                os.replace(target, source)
+            except OSError as rollback_error:
+                rollback_errors.append(str(rollback_error))
+        detail = f"; rollback incomplete: {', '.join(rollback_errors)}" if rollback_errors else ""
+        raise ConfigurationError(f"Unable to reset reports: {error}{detail}. Snapshot: {snapshot}") from error
+    return snapshot, len(moved)
 
 
 def followup_activities(path: Path | None = None) -> list[dict[str, str]]:
@@ -662,7 +811,8 @@ def assistant_command(provider: str, profile: str, prompt: str) -> list[str]:
         ]
     if provider == "claude":
         return [
-            executable, "--print", "--model", model,
+            executable, "--settings", claude_sandbox_settings(),
+            "--print", "--model", model,
             "--permission-mode", "plan", "--permission-prompts", "none", prompt,
         ]
     raise ConfigurationError(f"Unsupported AI provider: {provider}")
@@ -847,6 +997,8 @@ def component_status() -> list[tuple[str, str, str]]:
         executable = shutil.which(name)
         rows.append((name, "Ready" if executable else "Optional", executable or "not installed"))
     if sys.platform.startswith("linux"):
+        sandbox = sandbox_preflight(("codex", "claude"))
+        rows.append(("AI OS sandbox", str(sandbox["state"]), str(sandbox["details"])))
         desktop_path, _icon_path = integration_paths()
         installed = desktop_entry_installed()
         rows.append((
@@ -862,6 +1014,21 @@ def component_status() -> list[tuple[str, str, str]]:
     except BackupError as error:
         rows.append(("Configuration backup", "Missing", str(error)))
     return rows
+
+
+def sandbox_configuration_plan() -> dict[str, Any]:
+    """Expose fixed, reviewable Linux setup guidance to the GUI."""
+    preflight = sandbox_preflight(("codex", "claude"))
+    setup = sandbox_setup_plan(
+        apparmor_required=bool(preflight["apparmor_restricted"] and not preflight["probe_ok"]),
+    )
+    return {
+        "command": str(setup["command"]),
+        "supported": bool(setup["supported"]),
+        "claude_documentation": CLAUDE_SANDBOX_DOCUMENTATION,
+        "ubuntu_documentation": UBUNTU_APPARMOR_DOCUMENTATION,
+        "note": str(setup["note"]),
+    }
 
 
 def install_desktop_launcher() -> tuple[Path, Path]:
