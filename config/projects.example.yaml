@@ -1,0 +1,25 @@
+# Factory template copied to config/local/projects.yaml during initialization.
+# Replace placeholders only in the Git-ignored local copy.
+
+schema_version: 1
+
+project_roots:
+  - path: /path/to/source-code
+    enabled: true
+    label: primary-workspace
+    exclude:
+      - "**/.git/**"
+      - "**/vendor/**"
+      - "**/node_modules/**"
+      - "**/.venv/**"
+      - "**/venv/**"
+      - "**/.cache/**"
+      - "**/runtime/**"
+      - "**/.sub-worktrees/**"
+      - "**/*.worktrees/**"
+
+inventory:
+  generated_at: null
+  refresh_after_hours: 168
+  max_files_per_project: 20000
+  projects: []

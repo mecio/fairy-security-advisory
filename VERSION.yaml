@@ -1,0 +1,9 @@
+# SPDX-FileCopyrightText: 2026 fAIry Security Advisory contributors
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+schema_version: 1
+name: fAIry Security Advisory
+version: 0.1.2
+author: Graziano Ugenti <gucw@proton.me>
+last_modified_year: 2026
+license: AGPL-3.0-or-later

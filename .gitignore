@@ -1,0 +1,51 @@
+# Local configuration and potentially sensitive files
+!AGENTS.md
+!AI-INSTRUCTIONS.md
+!CLAUDE.md
+!.claude/
+!.claude/skills/
+!.claude/skills/**
+config/local/
+# Legacy layout remains ignored during migration to config/local/.
+config/*.local.yaml
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+secrets/
+
+# Environment-derived output, scanner results, and caches
+output/
+.cache/
+.tmp/
+tmp/
+artifacts/
+*.sarif
+*.cyclonedx.json
+*.spdx.json
+osv-results*.json
+trivy-results*.json
+
+# Python and local tooling
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+build/
+dist/
+
+# Desktop GUI local state and packaging output
+desktop/.qt_for_python/
+desktop/*.spec
+
+# IDE and operating-system files
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

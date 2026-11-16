@@ -1,0 +1,14 @@
+schema_version: 1
+
+backups:
+  directory: output/config-backups
+  source_directory: config/local
+  include:
+    - projects.yaml
+    - advisory-sources.yaml
+    - reports.yaml
+    - ai-agents.yaml
+    - backups.yaml
+    - application.yaml
+  archive_prefix: fairy-config
+  checksum: sha256

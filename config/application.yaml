@@ -1,0 +1,6 @@
+schema_version: 1
+
+# Local desktop and maintainer preferences. Personal changes belong in the
+# Git-ignored config/local/application.yaml override.
+application:
+  developer_tools: false

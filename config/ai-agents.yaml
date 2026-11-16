@@ -1,0 +1,53 @@
+schema_version: 1
+
+# Cost-aware model selection for terminal AI agents. The economical profile is
+# the default; users can explicitly choose a more capable profile when needed.
+default_profile: economical
+
+# Execution controls are independent from model selection. Economical mode is
+# the default and avoids sub-agents and parallel requests.
+default_execution_mode: economical
+
+execution_modes:
+  economical:
+    description: Lowest consumption; sources and AI analysis run sequentially.
+    max_parallel_sources: 1
+    use_subagents: false
+    max_subagents: 0
+
+  balanced:
+    description: Moderate concurrency and a small number of source-analysis sub-agents.
+    max_parallel_sources: 3
+    use_subagents: true
+    max_subagents: 2
+
+  fast:
+    description: Maximum configured concurrency for faster checks and higher consumption.
+    max_parallel_sources: 6
+    use_subagents: true
+    max_subagents: 5
+
+profiles:
+  economical:
+    description: Lowest-cost option for frequent checks and initial triage.
+    agents:
+      codex:
+        model: gpt-5.6-luna
+      claude:
+        model: haiku
+
+  balanced:
+    description: Recommended balance for advisory correlation and applicability analysis.
+    agents:
+      codex:
+        model: gpt-5.6-terra
+      claude:
+        model: sonnet
+
+  thorough:
+    description: Higher-cost option for difficult or ambiguous investigations.
+    agents:
+      codex:
+        model: gpt-5.6-sol
+      claude:
+        model: opus

@@ -1,0 +1,4 @@
+interface:
+  display_name: "fAIry Security Advisory"
+  short_description: "AI-assisted advisory checks and follow-ups"
+  default_prompt: "Use $fairy-security-advisory to run the complete advisory check and update the reports."

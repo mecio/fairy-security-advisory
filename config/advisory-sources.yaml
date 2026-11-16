@@ -1,0 +1,56 @@
+schema_version: 1
+
+advisory_sources:
+  - id: acn-alert-bollettini
+    name: ACN - Alerts and Bulletins
+    url: https://www.acn.gov.it/portale/ricerca?category=40487
+    type: html
+    category_or_filter: "category=40487; select topics covering the complete stack"
+    technologies: [all-stack]
+    priority: critical
+    active: true
+
+  - id: github-advisory-database
+    name: GitHub Advisory Database
+    url: https://github.com/github/advisory-database
+    type: repository
+    category_or_filter: "advisories/github-reviewed and advisories/unreviewed in OSV format"
+    technologies: [composer, npm, pip, maven, rubygems, github-actions, supply-chain]
+    priority: high
+    active: true
+
+  - id: osv
+    name: OSV.dev API
+    url: https://api.osv.dev/v1/querybatch
+    type: api
+    category_or_filter: "batch query by ecosystem, package name, and resolved version"
+    technologies: [composer, npm, pypi, maven, containers, linux, dependencies]
+    priority: high
+    active: true
+
+  - id: cisa-kev
+    name: CISA Known Exploited Vulnerabilities Catalog
+    url: https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json
+    type: json
+    category_or_filter: "complete catalog; correlate by CVE and product"
+    technologies: [operating-systems, network, web-servers, databases, applications]
+    priority: critical
+    active: true
+
+  - id: openssf-malicious-packages
+    name: OpenSSF Malicious Packages
+    url: https://github.com/ossf/malicious-packages
+    type: repository
+    category_or_filter: "records under osv/ in OSV format"
+    technologies: [composer, npm, pypi, maven, rubygems, supply-chain]
+    priority: critical
+    active: true
+
+  - id: cve-list-v5
+    name: CVE List V5
+    url: https://github.com/CVEProject/cvelistV5
+    type: repository
+    category_or_filter: "records published under cves/ in CVE JSON 5 format"
+    technologies: [all-stack]
+    priority: normal
+    active: true

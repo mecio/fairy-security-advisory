@@ -1,0 +1,14 @@
+schema_version: 1
+
+reports:
+  daily_directory: output/daily-advisory-check
+  daily_filename: "%Y-%m-%d.md"
+  summary_file: output/check-summary.md
+  followup_file: output/followup.md
+  followup_archive_directory: output/followup-archive
+  timezone: UTC
+  language: en
+  include_open_followups: true
+  preserve_existing_evidence: true
+  risk_levels: [critical, high, medium, low, informational]
+  classifications: [immediate-action, follow-up, monitor, not-applicable]

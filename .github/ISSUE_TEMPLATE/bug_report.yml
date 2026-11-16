@@ -1,0 +1,59 @@
+name: Bug report
+description: Report a reproducible problem in fAIry Security Advisory
+title: "[Bug]: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for reporting a problem. Remove local paths, credentials,
+        tokens, private project names, inventories, and production findings.
+        Report suspected vulnerabilities privately as described in SECURITY.md.
+  - type: input
+    id: version
+    attributes:
+      label: fAIry version
+      placeholder: 0.1.2
+    validations:
+      required: true
+  - type: dropdown
+    id: interface
+    attributes:
+      label: Interface
+      options:
+        - Desktop GUI
+        - Interactive CLI
+        - Non-interactive CLI
+        - Codex skill
+        - Claude skill
+        - Documentation
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: Problem
+      description: What happened and what did you expect instead?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction steps
+      description: Use synthetic data and redact machine-specific information.
+    validations:
+      required: true
+  - type: textarea
+    id: verification
+    attributes:
+      label: Verification performed
+      description: Include local commands and results, with sensitive data removed.
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Privacy confirmation
+      options:
+        - label: I removed credentials, private paths, inventories, and production data.
+          required: true
+        - label: This is not a private vulnerability disclosure about fAIry itself.
+          required: true
