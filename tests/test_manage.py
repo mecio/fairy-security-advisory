@@ -40,6 +40,44 @@ class AdvisorySourceRequestTest(unittest.TestCase):
         self.assertFalse(valid)
         self.assertIn("not updated: daily report, summary", detail)
 
+    def test_canonical_output_validation_requires_every_selected_project(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            paths = {
+                "daily report": root / "daily.md",
+                "summary": root / "summary.md",
+                "follow-up": root / "followup.md",
+            }
+            prior = (
+                "### Projects and technologies involved\n"
+                "- Project: `worker` — previous check.\n"
+            )
+            paths["daily report"].write_text(
+                prior + "\n### Projects and technologies involved\n"
+                "- Project: `api` — evidence checked.\n",
+                encoding="utf-8",
+            )
+            paths["summary"].write_text("updated summary\n", encoding="utf-8")
+            paths["follow-up"].write_text("existing follow-up\n", encoding="utf-8")
+            valid, detail = validate_canonical_report_updates(
+                paths, {name: None for name in paths},
+                expected_project_ids=["api", "worker"],
+                prior_daily_text=prior,
+            )
+            self.assertFalse(valid)
+            self.assertIn("missing project coverage: worker", detail)
+            paths["daily report"].write_text(
+                paths["daily report"].read_text(encoding="utf-8")
+                + "- Project: `worker` — dossier reviewed.\n",
+                encoding="utf-8",
+            )
+            valid, _detail = validate_canonical_report_updates(
+                paths, {name: None for name in paths},
+                expected_project_ids=["api", "worker"],
+                prior_daily_text=prior,
+            )
+            self.assertTrue(valid)
+
     @patch.dict("os.environ", {"FAIRY_GUI_PROGRESS": "1"})
     @patch("builtins.print")
     def test_analysis_progress_event_is_machine_readable(self, output) -> None:
@@ -194,7 +232,13 @@ class AdvisorySourceRequestTest(unittest.TestCase):
             if provider == "codex":
                 for name, path in canonical_paths.items():
                     path.parent.mkdir(parents=True, exist_ok=True)
-                    path.write_text(f"# Updated {name}\n", encoding="utf-8")
+                    content = (
+                        "# Daily report\n\n### Projects and technologies involved\n"
+                        "- Project: `default` — evidence checked.\n"
+                        "- Project: `claude` — dossier checked.\n"
+                        if name == "daily report" else f"# Updated {name}\n"
+                    )
+                    path.write_text(content, encoding="utf-8")
             return 0
 
         with TemporaryDirectory() as directory:
@@ -247,7 +291,13 @@ class AdvisorySourceRequestTest(unittest.TestCase):
     def test_ai_launch_can_be_cancelled(
         self, _command, _prepare, _confirm, run_command, _print,
     ) -> None:
-        self.assertEqual(run_ai_check("codex"), 0)
+        plan = {
+            "default_provider": "codex",
+            "groups": {"codex": [{"id": "example", "path": "/example"}], "claude": []},
+            "selected_count": 1, "excluded_count": 0,
+        }
+        with patch("scripts.manage.build_analysis_plan", return_value=plan):
+            self.assertEqual(run_ai_check("codex"), 0)
         run_command.assert_not_called()
 
     @patch("builtins.print")

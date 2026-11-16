@@ -12,6 +12,7 @@ import getpass
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -858,6 +859,12 @@ def consolidation_prompt(
         f"projects assigned to {provider} directly. Read and critically verify the "
         "read-only dossiers produced by other providers, deduplicate all findings, then "
         "update the canonical daily report, summary, follow-up, and archive exactly once. "
+        "In the newest daily report section 'Projects and technologies involved', "
+        "include one line '- Project: `<id>` — ...' for every selected project "
+        "in every provider group, including projects with no confirmed findings. "
+        "Explain each project's evidence, disposition, and limitations; do not "
+        "treat a read-only dossier as outside scope merely because another provider "
+        "collected it. "
         "If output/report-resets/ has snapshots, consult their follow-up and "
         "closed-issue archives, newest first, for historical status and stable IDs; a reset is "
         "not new evidence that a previously resolved issue is vulnerable again. "
@@ -893,6 +900,8 @@ def report_signature(path: Path) -> str | None:
 
 def validate_canonical_report_updates(
     paths: dict[str, Path], before: dict[str, str | None],
+    *, expected_project_ids: list[str] | None = None,
+    prior_daily_text: str | None = None,
 ) -> tuple[bool, str]:
     """Reject a nominally successful coordinator that did not publish its result."""
     missing = [
@@ -911,6 +920,36 @@ def validate_canonical_report_updates(
         problems.append("missing or empty: " + ", ".join(missing))
     if unchanged_required:
         problems.append("not updated: " + ", ".join(unchanged_required))
+    if expected_project_ids and paths["daily report"].is_file():
+        daily_text = paths["daily report"].read_text(encoding="utf-8", errors="replace")
+        current_text = (
+            daily_text[len(prior_daily_text):]
+            if prior_daily_text is not None and daily_text.startswith(prior_daily_text)
+            else daily_text
+        )
+        headings = list(re.finditer(
+            r"(?im)^(#{2,4})\s+Projects and technologies involved\s*$",
+            current_text,
+        ))
+        if not headings:
+            problems.append("missing current projects and technologies section")
+        else:
+            heading = headings[-1]
+            level = len(heading.group(1))
+            section = current_text[heading.end():]
+            next_heading = re.search(rf"(?m)^#{{1,{level}}}\s+", section)
+            if next_heading:
+                section = section[:next_heading.start()]
+            missing_projects: list[str] = []
+            for project_id in sorted(set(expected_project_ids)):
+                expected_count = expected_project_ids.count(project_id)
+                marker = re.compile(
+                    rf"(?m)^\s*-\s*Project:\s*`{re.escape(project_id)}`\s*(?:—|[-:]|$)",
+                )
+                if len(marker.findall(section)) < expected_count:
+                    missing_projects.append(project_id)
+            if missing_projects:
+                problems.append("missing project coverage: " + ", ".join(missing_projects))
     if problems:
         return False, "; ".join(problems)
     followup_state = "updated" if changed.get("follow-up") else "verified unchanged"
@@ -1174,6 +1213,11 @@ def run_ai_check(
     canonical_before = {
         name: report_signature(path) for name, path in canonical_paths.items()
     }
+    daily_path = canonical_paths["daily report"]
+    prior_daily_text = (
+        daily_path.read_text(encoding="utf-8", errors="replace")
+        if daily_path.is_file() else None
+    )
     command = ai_command(
         provider, profile_name, mode_name, non_interactive=True,
         prompt=consolidation_prompt(provider, plan_path, dossiers, mode_name),
@@ -1213,6 +1257,10 @@ def run_ai_check(
     if result == 0:
         reports_valid, report_validation = validate_canonical_report_updates(
             canonical_paths, canonical_before,
+            expected_project_ids=[
+                item["id"] for projects in plan["groups"].values() for item in projects
+            ],
+            prior_daily_text=prior_daily_text,
         )
         if not reports_valid:
             result = 2

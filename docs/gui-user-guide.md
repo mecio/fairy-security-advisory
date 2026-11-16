@@ -600,10 +600,12 @@ and incomplete controls. **Clear log** removes only the visible process text
 from the widget.
 
 After the coordinator exits, fAIry verifies the result independently. The daily
-report and current summary must have changed, and the follow-up register must be
-present and non-empty. If these checks fail, the run is marked failed with exit
-code 2 even when the AI CLI itself returned zero. The private event log records
-the exact output-validation reason.
+report and current summary must have changed, the follow-up register must be
+present and non-empty, and the newest report section must identify every
+selected project under **Projects and technologies involved**. A project with no
+confirmed finding still needs an explicit coverage line and limitations. If
+these checks fail, the run is marked failed with exit code 2 even when the AI
+CLI itself returned zero. The private event log records the reason.
 
 **Stop** first requests graceful process termination. If the process does not
 exit promptly, the desktop application may force it to stop. A stopped run can

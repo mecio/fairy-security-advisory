@@ -19,6 +19,11 @@ Use these sections, adapting them without removing historical evidence:
 9. `Changes made`: normally reports, summary, follow-up, and local inventory only.
 
 Cite sources close to supported claims. Do not copy long passages.
+For routed checks, include one line ``- Project: `<id>` — ...`` under the newest
+`Projects and technologies involved` heading for **every** selected project,
+including other-provider dossier projects and projects with no confirmed
+finding. State its evidence, disposition, and limits. The launcher checks these
+lines before declaring the run complete.
 
 ## Summary
 

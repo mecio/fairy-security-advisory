@@ -18,6 +18,8 @@ and the project intends to use [Semantic Versioning](https://semver.org/).
   summary, follow-up, and closed-issue history locally before a fresh check.
 - Inventory now accepts user-declared technologies per project, marks them
   separately from scanner findings, and preserves them across refreshes.
+- Complete checks now require an explicit coverage line for each selected
+  project in the newest daily report section before reporting success.
 
 ### Changed
 
