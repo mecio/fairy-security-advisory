@@ -45,6 +45,23 @@ class ToolInstallationTest(unittest.TestCase):
         self.assertIn("blocked", plan)
         self.assertIn("Neither curl nor wget", plan["blocked"])
 
+    @patch("scripts.tool_installation.shutil.which", return_value="/usr/bin/curl")
+    def test_claude_uses_recommended_native_installer_without_npm(self, _which) -> None:
+        plan = installation_plan("claude")
+
+        self.assertNotIn("blocked", plan)
+        self.assertIn("https://claude.ai/install.sh", plan["command"])
+        self.assertIn('"$HOME/.local/bin/claude" --version', plan["command"])
+        self.assertNotIn("npm", plan["command"])
+        self.assertIn("IDE-managed", plan["note"])
+
+    @patch("scripts.tool_installation.shutil.which", return_value=None)
+    def test_claude_install_is_blocked_without_curl(self, _which) -> None:
+        plan = installation_plan("claude")
+
+        self.assertIn("blocked", plan)
+        self.assertIn("curl is not available", plan["blocked"])
+
     @patch("scripts.tool_installation.platform.machine", return_value="x86_64")
     @patch("scripts.tool_installation.shutil.which")
     @patch("scripts.tool_installation.linux_distribution", return_value=("ubuntu", {"debian"}))

@@ -248,6 +248,13 @@ executables without being overwritten. If only an IDE-bundled command is
 visible, fAIry can use it in that inherited session, but a desktop-menu launch
 may still require the standalone user installation.
 
+For Claude Code on Linux, **Install** uses Anthropic's recommended native
+installer. It creates `~/.local/bin/claude` as a launcher for versioned binaries
+under `~/.local/share/claude/versions/`, requires neither Node.js nor npm, and
+does not remove IDE-managed executables. fAIry applies the same resolution rule:
+the stable user launcher is preferred when present, while a bundled IDE command
+remains usable within sessions that expose it through `PATH`.
+
 These tabs also show aggregate measurements for complete, non-interactive
 analyses launched through fAIry. The ignored
 `output/ai-usage/events.jsonl` history records provider, selected model and

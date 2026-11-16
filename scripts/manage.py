@@ -84,8 +84,8 @@ AGENT_INSTALLATION = {
         "https://developers.openai.com/cookbook/examples/codex/using_goals_in_codex#quickstart-using-goals",
     ),
     "claude": (
-        "npm install -g @anthropic-ai/claude-code@latest",
-        "https://code.claude.com/docs/en/getting-started",
+        "Use fAIry's reviewed native installation plan.",
+        "https://code.claude.com/docs/en/setup#install-claude-code",
     ),
 }
 

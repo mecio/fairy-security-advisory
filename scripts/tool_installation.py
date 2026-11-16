@@ -68,6 +68,40 @@ def codex_standalone_installation() -> dict[str, str]:
     }
 
 
+def claude_native_installation() -> dict[str, str]:
+    """Return Anthropic's recommended native per-user installer."""
+    documentation = "https://code.claude.com/docs/en/setup#install-claude-code"
+    if not shutil.which("curl"):
+        return {
+            "command": "See the official Claude Code installation documentation.",
+            "documentation": documentation,
+            "note": "The native installer requires curl.",
+            "blocked": (
+                "curl is not available, so the recommended native Claude Code "
+                "installer cannot be downloaded safely."
+            ),
+        }
+    installer = "https://claude.ai/install.sh"
+    command = " && \\\n".join((
+        'tmp_dir="$(mktemp -d)"',
+        "trap 'rm -rf \"$tmp_dir\"' EXIT",
+        'curl --fail --silent --show-error --location --proto "=https" --tlsv1.2 '
+        f'-o "$tmp_dir/install.sh" "{installer}"',
+        'bash "$tmp_dir/install.sh"',
+        '"$HOME/.local/bin/claude" --version',
+    ))
+    return {
+        "command": command,
+        "documentation": documentation,
+        "note": (
+            "Uses Anthropic's recommended native installer. It manages a stable "
+            "user launcher under ~/.local/bin and versioned binaries under "
+            "~/.local/share/claude without Node.js, npm, or administrator privileges. "
+            "IDE-managed executables are not removed."
+        ),
+    }
+
+
 def go_toolchain_status() -> tuple[bool, str]:
     """Return whether the installed Go toolchain can build current OSV-Scanner."""
     executable = shutil.which("go")
@@ -146,15 +180,8 @@ def installation_plan(component: str) -> dict[str, str] | None:
     family = {distro_id, *distro_like}
     if component == "codex":
         return codex_standalone_installation()
-    fixed = {
-        "claude": {
-            "command": "npm install -g @anthropic-ai/claude-code@latest",
-            "documentation": "https://code.claude.com/docs/en/getting-started",
-            "note": "Requires Node.js and npm. Authenticate Claude Code after installation.",
-        },
-    }
-    if component in fixed:
-        return fixed[component]
+    if component == "claude":
+        return claude_native_installation()
 
     if component == "git":
         if family & {"debian", "ubuntu"}:

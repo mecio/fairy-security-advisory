@@ -16,6 +16,9 @@ and the project intends to use [Semantic Versioning](https://semver.org/).
 - Codex installation now uses OpenAI's standalone user installer without a
   Node.js/npm prerequisite, preserves IDE-managed copies, and gives fAIry a
   stable executable independent of the launching environment.
+- Claude Code installation now uses Anthropic's recommended native user
+  installer instead of npm, preserving IDE-managed copies and providing the
+  same stable executable resolution used for Codex.
 
 ## [0.1.2] - 2026-11-16
 
