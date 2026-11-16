@@ -875,13 +875,11 @@ class MainWindow(QMainWindow):
         ))
         self.followup_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.followup_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        self.followup_table.verticalHeader().setDefaultSectionSize(76)
+        self.followup_table.verticalHeader().setDefaultSectionSize(96)
         self.followup_table.horizontalHeader().setMinimumHeight(38)
-        for column in (1, 5):
-            self.followup_table.horizontalHeader().setSectionResizeMode(
-                column, QHeaderView.ResizeMode.Stretch,
-            )
-        for column, width in ((0, 210), (2, 75), (3, 120), (4, 125), (6, 215)):
+        for column, width in (
+            (0, 245), (1, 100), (2, 75), (3, 90), (4, 100), (5, 115), (6, 205),
+        ):
             self.followup_table.horizontalHeader().setSectionResizeMode(
                 column, QHeaderView.ResizeMode.Fixed,
             )
@@ -1121,10 +1119,15 @@ class MainWindow(QMainWindow):
         buttons.addStretch()
         layout.addLayout(buttons)
 
+        self.run_tabs = QTabWidget()
+        activity_page = QWidget()
+        activity_page_layout = QVBoxLayout(activity_page)
+        activity_page_layout.setContentsMargins(8, 10, 8, 8)
+        activity_page_layout.setSpacing(8)
         self.run_journey = RunJourneyWidget(
             services.ROOT / "desktop/assets/fairy-security-advisory-icon.png"
         )
-        layout.addWidget(self.run_journey, 2)
+        activity_page_layout.addWidget(self.run_journey, 1)
 
         activity = QFrame()
         activity.setObjectName("card")
@@ -1147,14 +1150,14 @@ class MainWindow(QMainWindow):
         self.analysis_elapsed_label.setMinimumWidth(92)
         self.analysis_elapsed_label.setAlignment(Qt.AlignmentFlag.AlignRight)
         activity_layout.addWidget(self.analysis_elapsed_label)
-        layout.addWidget(activity)
+        activity_page_layout.addWidget(activity)
+        self.run_tabs.addTab(activity_page, "Activity")
 
-        log_card = QFrame()
-        log_card.setObjectName("card")
-        log_layout = QVBoxLayout(log_card)
-        log_layout.setContentsMargins(14, 10, 14, 12)
+        log_page = QWidget()
+        log_layout = QVBoxLayout(log_page)
+        log_layout.setContentsMargins(8, 10, 8, 8)
         log_header = QHBoxLayout()
-        log_header.addWidget(QLabel("Detailed log"))
+        log_header.addWidget(QLabel("Process output"))
         log_header.addStretch()
         clear = QPushButton("Clear log")
         clear.setProperty("variant", "secondary")
@@ -1166,7 +1169,8 @@ class MainWindow(QMainWindow):
         self.log.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
         self.log.setPlaceholderText("Process output will appear here.")
         log_layout.addWidget(self.log, 1)
-        layout.addWidget(log_card, 1)
+        self.run_tabs.addTab(log_page, "Detailed log")
+        layout.addWidget(self.run_tabs, 1)
         return page
 
     def _status_page(self) -> QWidget:
@@ -1854,7 +1858,7 @@ class MainWindow(QMainWindow):
         open_ids = {item.get("ID") for item in services.open_followup_activities(path)}
         for row, activity in enumerate(activities):
             advisory = activity.get("Advisory / CVE", "")
-            first_advisory = advisory.split(";", 1)[0]
+            issue_title = activity.get("Issue title", "").strip()
             source_links = services.followup_source_links(activity)
             source_html = ""
             if source_links:
@@ -1869,9 +1873,14 @@ class MainWindow(QMainWindow):
                     )
                 rendered_links = " · ".join(rendered)
                 source_html = f'<br><span style="color:#9fb8cc;">Source: {rendered_links}</span>'
+            title_html = (
+                f'<b style="color:#e5f5ff;">{html.escape(issue_title)}</b><br>'
+                if issue_title else ""
+            )
             activity_label = QLabel(
-                f"<b>{html.escape(activity.get('ID', ''))}</b><br>"
-                f"{html.escape(first_advisory)}{source_html}"
+                f"{title_html}"
+                f'<span style="color:#a9c3d8;">{html.escape(activity.get("ID", ""))}</span><br>'
+                f"{html.escape(advisory)}{source_html}"
             )
             activity_label.setStyleSheet("background: transparent; padding: 5px 6px;")
             activity_label.setTextFormat(Qt.TextFormat.RichText)
@@ -1879,7 +1888,8 @@ class MainWindow(QMainWindow):
             activity_label.setOpenExternalLinks(True)
             activity_label.setWordWrap(True)
             activity_label.setToolTip(
-                advisory + ("\n" + "\n".join(url for _label, url in source_links) if source_links else "")
+                (issue_title + "\n" if issue_title else "") + advisory
+                + ("\n" + "\n".join(url for _label, url in source_links) if source_links else "")
             )
             self.followup_table.setCellWidget(row, 0, activity_label)
             values = (
@@ -2002,6 +2012,7 @@ class MainWindow(QMainWindow):
         for issue in services.open_followup_activities():
             label = (
                 f"{issue.get('Project', 'unknown')}  |  {issue.get('ID', 'unknown')}  |  "
+                f"{issue.get('Issue title') or issue.get('Advisory / CVE', 'unknown')}  |  "
                 f"{issue.get('Priority', 'unknown')}  |  {issue.get('Status', 'unknown')}"
             )
             self.assistant_issue_combo.addItem(label, issue)
@@ -2035,9 +2046,15 @@ class MainWindow(QMainWindow):
             "critical": "#df7f7f", "high": "#e5bb62", "medium": "#9fd3e5",
             "low": "#8fd3a4",
         }.get(priority.casefold(), "#c9dded")
+        issue_title_html = (
+            f'<span style="color:#7890a8;">ISSUE</span> '
+            f'<b>{html.escape(str(issue["Issue title"]))}</b><br>'
+            if issue.get("Issue title") else ""
+        )
         self.assistant_issue_details.setText(
             f'<span style="color:#7890a8;">ACTIVITY</span> '
             f'<b>{html.escape(str(issue.get("ID") or "Unknown"))}</b><br>'
+            f'{issue_title_html}'
             f'<span style="color:#7890a8;">ADVISORY</span> '
             f'<b>{html.escape(str(issue.get("Advisory / CVE") or "Unknown"))}</b><br>'
             f'<span style="color:{priority_color};"><b>{priority}</b></span> priority &nbsp;·&nbsp; '
@@ -2580,6 +2597,7 @@ class MainWindow(QMainWindow):
             assume_yes=assume_yes, non_interactive=non_interactive,
         )
         self._navigate_to_page(PAGE_RUN)
+        self.run_tabs.setCurrentIndex(0)
         self.log.appendPlainText(f"\n$ {shlex.join(command)}\n")
         self.current_action = action
         self.process_output_buffer = ""

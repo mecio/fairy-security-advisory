@@ -199,7 +199,7 @@ The desktop application provides:
   optional Codex/Claude preference, and manual additions for technologies
   missed by the scanner;
 - rendered daily reports and summary, plus an interactive follow-up table with
-  primary-source links for advisories and CVEs;
+  searchable issue titles, advisory/CVE identifiers, and primary-source links;
 - a local year/month analysis-log archive with summary, event, routing, AI
   output, evidence viewing, and confirmed per-run deletion;
 - an AI issue assistant linked to one open follow-up ID and project at a time;
@@ -229,7 +229,7 @@ at the beginning or end. **Back to top** returns to the contents section.
 The desktop **AI issue assistant** page supports operational conversations
 about an existing open follow-up. Select an issue before asking for advice,
 reporting ownership, recording remediation evidence, or explaining why an
-advisory is not applicable. The selected ID, project, CVE/advisory, priority,
+advisory is not applicable. The selected ID, issue title, project, CVE/advisory, priority,
 owner, status, and next action are provided as context to the chosen Codex or
 Claude model/profile.
 
@@ -566,9 +566,10 @@ boundary cannot be created. fAIry never switches Codex to
 `danger-full-access` or Claude to bypass-permissions mode.
 
 While an analysis is running, the desktop footer remains visible on every page
-and identifies the active provider and phase. The Run check page also shows
-the animated fAIry workflow, a separate detailed process log, elapsed time,
-and completed projects. The animation follows real phase events but illustrates
+and identifies the active provider and phase. The Run check Activity tab shows
+the animated fAIry workflow, elapsed time, and completed projects. The separate
+Detailed log tab gives process output the full available height. The animation
+follows real phase events but illustrates
 the workflow rather than measuring individual file or network requests.
 Progress advances only at verified
 provider-group boundaries because Codex and Claude do not expose a dependable

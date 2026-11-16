@@ -30,11 +30,11 @@ ASSETS = ROOT / "docs/assets"
 def demo_followup() -> str:
     return (
         "# Follow-up\n\n"
-        "| ID | Advisory / CVE | Project | Description | Priority | Owner | Status | Opened | Last updated | Next action | Due date | Completion evidence | Source URL |\n"
-        "|---|---|---|---|---|---|---|---|---|---|---|---|---|\n"
-        "| DEMO-001 | DEMO-ADV-001 | customer-portal | Example framework update | High | Application team | Open | 2026-11-16 | 2026-11-16 | Validate the fixed release in staging | 2026-11-20 | — | [Vendor advisory](https://example.com/security/advisories/demo-001) |\n"
-        "| DEMO-002 | DEMO-ADV-002 | payments-api | Example runtime advisory | Medium | Platform team | Needs verification | 2026-11-16 | 2026-11-16 | Confirm the deployed runtime version | — | — | [Vendor advisory](https://example.com/security/advisories/demo-002) |\n"
-        "| DEMO-003 | DEMO-ADV-003 | analytics-worker | Example transitive dependency | Low | Security team | Monitoring | 2026-11-15 | 2026-11-16 | Monitor upstream remediation | — | — | [Project advisory](https://example.com/security/advisories/demo-003) |\n"
+        "| ID | Issue title | Advisory / CVE | Project | Description | Priority | Owner | Status | Opened | Last updated | Next action | Due date | Completion evidence | Source URL |\n"
+        "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|\n"
+        "| DEMO-001 | Framework request parsing issue | DEMO-ADV-001 | customer-portal | Example framework update | High | Application team | Open | 2026-11-16 | 2026-11-16 | Validate the fixed release in staging | 2026-11-20 | — | [Vendor advisory](https://example.com/security/advisories/demo-001) |\n"
+        "| DEMO-002 | Runtime patch verification | DEMO-ADV-002 | payments-api | Example runtime advisory | Medium | Platform team | Needs verification | 2026-11-16 | 2026-11-16 | Confirm the deployed runtime version | — | — | [Vendor advisory](https://example.com/security/advisories/demo-002) |\n"
+        "| DEMO-003 | Transitive dependency review | DEMO-ADV-003 | analytics-worker | Example transitive dependency | Low | Security team | Monitoring | 2026-11-15 | 2026-11-16 | Monitor upstream remediation | — | — | [Project advisory](https://example.com/security/advisories/demo-003) |\n"
     )
 
 

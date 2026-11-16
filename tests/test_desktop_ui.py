@@ -16,12 +16,13 @@ try:
     from desktop import services
     from desktop.eula_dialog import EulaDialog
     from desktop.inventory_technologies_dialog import InventoryTechnologiesDialog
-    from desktop.main_window import BarChartCard, MainWindow
+    from desktop.main_window import BarChartCard, MainWindow, PAGE_RUN
     from desktop.run_visualization import RunJourneyWidget
 except ImportError:
     QApplication = None
     BarChartCard = None
     MainWindow = None
+    PAGE_RUN = None
     QLabel = None
     QPushButton = None
     QUrl = None
@@ -102,6 +103,33 @@ class DesktopWindowTest(unittest.TestCase):
         self.assertIn("completed", window.analysis_activity_label.text().casefold())
         self.assertEqual(window.run_journey.state, "completed")
         self.assertFalse(window.run_journey.timer.isActive())
+        window.close()
+        window.deleteLater()
+        application.processEvents()
+
+    def test_run_check_log_tab_uses_page_height_and_keeps_activity_running(self) -> None:
+        application = QApplication.instance() or QApplication([])
+        window = MainWindow()
+        window.resize(980, 680)
+        window.show()
+        window._navigate_to_page(PAGE_RUN)
+        window.run_tabs.setCurrentIndex(1)
+        application.processEvents()
+
+        self.assertEqual(
+            [window.run_tabs.tabText(index) for index in range(window.run_tabs.count())],
+            ["Activity", "Detailed log"],
+        )
+        self.assertGreater(window.log.height(), 250)
+        window.run_journey.start("ai-check")
+        window._handle_analysis_progress({
+            "phase": "consolidation", "status": "running", "provider": "codex",
+            "completed": 1, "total": 2, "message": "Consolidating evidence",
+        })
+        self.assertEqual(window.run_tabs.currentIndex(), 1)
+        self.assertEqual(window.run_journey.phase, "consolidation")
+        self.assertTrue(window.run_journey.timer.isActive())
+        window.run_journey.finish(True)
         window.close()
         window.deleteLater()
         application.processEvents()
@@ -662,6 +690,16 @@ class DesktopWindowTest(unittest.TestCase):
             self.assertEqual(open_buttons[0].property("variant"), "success")
             self.assertEqual(open_buttons[1].property("variant"), "ai")
             self.assertTrue(all(not button.isEnabled() for button in closed_buttons))
+            followup.write_text(
+                "| ID | Issue title | Advisory / CVE | Project | Description | Priority | Owner | Status | Opened | Last updated | Next action | Due date | Completion evidence | Source URL |\n"
+                "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|\n"
+                "| A-1 | PHP2Shell in PHP runtime | CVE-2026-1234 | api | Patch | High | Dev | Open | 2026-11-01 | 2026-11-01 | Upgrade | — | — | https://example.com/advisory |\n",
+                encoding="utf-8",
+            )
+            window.load_followup_table(followup)
+            self.assertIn("PHP2Shell in PHP runtime", window.followup_table.cellWidget(0, 0).text())
+            self.assertIn("CVE-2026-1234", window.followup_table.cellWidget(0, 0).text())
+            self.assertIn("https://example.com/advisory", window.followup_table.cellWidget(0, 0).text())
         window.close()
         window.deleteLater()
         application.processEvents()
@@ -672,6 +710,7 @@ class DesktopWindowTest(unittest.TestCase):
         issue = {
             "ID": "ADV-DEMO-001",
             "Project": "payments-api",
+            "Issue title": "Runtime advisory affecting payments API",
             "Advisory / CVE": "CVE-2026-1234",
             "Priority": "High",
             "Status": "Open",
@@ -687,6 +726,7 @@ class DesktopWindowTest(unittest.TestCase):
         self.assertEqual(window.assistant_project_label.text(), "payments-api")
         self.assertGreaterEqual(window.assistant_project_label.font().pointSize(), 18)
         self.assertIn("ADV-DEMO-001", window.assistant_issue_details.text())
+        self.assertIn("Runtime advisory affecting payments API", window.assistant_issue_details.text())
         self.assertIn("CVE-2026-1234", window.assistant_issue_details.text())
         self.assertTrue(window.assistant_issue_details.textInteractionFlags())
         window.close()

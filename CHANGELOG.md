@@ -7,7 +7,7 @@ and the project intends to use [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-## [0.2.0] - 2026-11-16
+## [0.2.0] - 2026-11-17
 
 ### Added
 
@@ -27,6 +27,10 @@ and the project intends to use [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- Follow-up activities now show a descriptive, searchable issue title in Reports
+  and AI issue assistant, alongside identifiers and source links.
+- Run check now separates the animated Activity view and full-height Detailed
+  log into tabs; switching tabs does not interrupt an active analysis.
 - Clear reports now leaves a manual reset snapshot that subsequent AI checks
   ignore; new reports and follow-up are rebuilt from current evidence only.
 - The Run check fairy now faces incoming sources and projects, turns toward

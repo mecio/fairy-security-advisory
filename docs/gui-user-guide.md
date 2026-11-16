@@ -391,13 +391,16 @@ files while an analysis or AI conversation is running.
 
 ### Active follow-up
 
-The active table shows one stable activity per row. Important columns include
-the issue identifier, advisory or CVE, affected project, description, priority,
+The active table shows one stable activity per row. Important fields include
+the searchable issue title, stable identifier, advisory or CVE, affected
+project, description, priority,
 owner, state, dates, next action, deadline, and completion evidence. Hover over
 shortened cells to read their full value.
 
-The activity/advisory cell includes the configured primary-source link below
-the identifier. When no source URL is recorded, recognized CVE identifiers link
+The activity/advisory cell puts the issue title first, followed by its stable
+ID, advisory/CVE identifiers, and configured primary-source links. Use the
+title as a search phrase and the linked advisory to verify the details. When
+no source URL is recorded, recognized CVE identifiers link
 to their official CVE records. Opening a link launches the system browser and
 does not change the activity.
 
@@ -483,7 +486,8 @@ The Run security checks page contains deterministic preparation commands and
 the complete AI-assisted workflow. Choose an AI provider, model profile, and
 execution mode before starting the full analysis.
 
-The prominent **fAIry at work** panel shows advisory sources and local projects
+The **Activity** tab opens with the prominent **fAIry at work** panel. It shows
+advisory sources and local projects
 flowing toward the fairy, then matching and reporting. Highlighted paths and
 sparkles follow the current operation: source checks light the advisory path,
 inventory refresh lights the project path, and a complete AI analysis changes
@@ -494,9 +498,10 @@ and sends a sparkle trail to the matching stage. The animation illustrates the
 workflow; it is not a live network map or
 a percentage of files scanned. The phase, provider, elapsed time, and project
 count come from actual process events. Project counts advance at provider group
-boundaries. The **Detailed log** below the animation retains the process output
-and is the place to read errors and evidence; **Clear log** only clears that
-on-screen view.
+boundaries. Switch to the separate **Detailed log** tab to give process output
+the full page area while analysis continues. It is the place to read errors
+and evidence; **Clear log** only clears that on-screen view. You can return to
+**Activity** at any time without interrupting the check.
 
 ### Check prerequisites
 
