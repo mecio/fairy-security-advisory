@@ -238,6 +238,16 @@ the official CLI:
 fAIry stores neither passwords nor access tokens. The provider CLI owns its
 credential files and authentication lifecycle.
 
+For Codex on Linux, **Install** uses OpenAI's standalone installer and creates a
+stable user command at `~/.local/bin/codex`; Node.js and npm are not required.
+The installer runs with prompts disabled, which means it never accepts an offer
+to uninstall a Codex copy managed by an IDE or another package manager. fAIry
+explicitly prefers the standalone user command when it exists. PhpStorm, VS
+Code, and other IDE integrations can therefore continue using their own bundled
+executables without being overwritten. If only an IDE-bundled command is
+visible, fAIry can use it in that inherited session, but a desktop-menu launch
+may still require the standalone user installation.
+
 These tabs also show aggregate measurements for complete, non-interactive
 analyses launched through fAIry. The ignored
 `output/ai-usage/events.jsonl` history records provider, selected model and

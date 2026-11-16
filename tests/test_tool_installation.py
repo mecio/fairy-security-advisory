@@ -2,13 +2,49 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
 from types import SimpleNamespace
+from pathlib import Path
+from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
 
-from scripts.tool_installation import go_toolchain_status, installation_plan
+from scripts.tool_installation import (
+    go_toolchain_status, installation_plan, resolve_agent_executable,
+)
 
 
 class ToolInstallationTest(unittest.TestCase):
+    @patch("scripts.tool_installation.shutil.which")
+    def test_codex_uses_official_standalone_installer_without_npm(self, which) -> None:
+        which.side_effect = lambda name: "/usr/bin/curl" if name == "curl" else None
+
+        plan = installation_plan("codex")
+
+        self.assertNotIn("blocked", plan)
+        self.assertIn("openai/codex/releases/latest/download/install.sh", plan["command"])
+        self.assertIn("CODEX_NON_INTERACTIVE=1", plan["command"])
+        self.assertIn('"$HOME/.local/bin/codex" --version', plan["command"])
+        self.assertNotIn("npm", plan["command"])
+        self.assertIn("IDE-managed", plan["note"])
+
+    @patch("scripts.tool_installation.Path.home")
+    @patch("scripts.tool_installation.shutil.which", return_value="/ide/bin/codex")
+    def test_user_codex_is_preferred_over_ide_path(self, _which, home) -> None:
+        with TemporaryDirectory() as directory:
+            home.return_value = Path(directory)
+            candidate = Path(directory) / ".local/bin/codex"
+            candidate.parent.mkdir(parents=True)
+            candidate.write_text("#!/bin/sh\n", encoding="utf-8")
+            candidate.chmod(0o700)
+
+            self.assertEqual(resolve_agent_executable("codex"), str(candidate))
+
+    @patch("scripts.tool_installation.shutil.which", return_value=None)
+    def test_codex_install_is_blocked_without_download_tool(self, _which) -> None:
+        plan = installation_plan("codex")
+
+        self.assertIn("blocked", plan)
+        self.assertIn("Neither curl nor wget", plan["blocked"])
+
     @patch("scripts.tool_installation.platform.machine", return_value="x86_64")
     @patch("scripts.tool_installation.shutil.which")
     @patch("scripts.tool_installation.linux_distribution", return_value=("ubuntu", {"debian"}))

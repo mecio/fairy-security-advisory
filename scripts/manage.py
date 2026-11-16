@@ -58,6 +58,10 @@ try:
     from desktop_integration import install_linux_desktop_entry, remove_linux_desktop_entry
 except ImportError:
     from scripts.desktop_integration import install_linux_desktop_entry, remove_linux_desktop_entry
+try:
+    from tool_installation import installation_plan, resolve_agent_executable
+except ImportError:
+    from scripts.tool_installation import installation_plan, resolve_agent_executable
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -76,8 +80,8 @@ AI_PROMPTS = {
 }
 AGENT_INSTALLATION = {
     "codex": (
-        "npm install -g @openai/codex@latest",
-        "https://developers.openai.com/cookbook/examples/codex/using_goals_in_codex",
+        "Use fAIry's reviewed standalone installation plan.",
+        "https://developers.openai.com/cookbook/examples/codex/using_goals_in_codex#quickstart-using-goals",
     ),
     "claude": (
         "npm install -g @anthropic-ai/claude-code@latest",
@@ -182,7 +186,7 @@ def setup_project_environment(*, assume_yes: bool = False) -> int:
 
 
 def agent_details(provider: str) -> tuple[str | None, bool]:
-    executable = shutil.which(provider)
+    executable = resolve_agent_executable(provider)
     if not executable:
         return None, False
     try:
@@ -203,6 +207,10 @@ def agent_details(provider: str) -> tuple[str | None, bool]:
 
 def show_agent_installation(provider: str) -> None:
     command, documentation = AGENT_INSTALLATION[provider]
+    plan = installation_plan(provider)
+    if plan:
+        command = plan["command"]
+        documentation = plan["documentation"]
     print(f"  Suggested installation: {command}")
     print(f"  Official documentation: {documentation}")
     print(f"  After installation, start `{provider}` once and complete authentication.")
@@ -756,7 +764,7 @@ def ai_command(
     provider: str, profile: str | None = None, execution_mode: str | None = None,
     *, non_interactive: bool = False,
 ) -> list[str] | None:
-    executable = shutil.which(provider)
+    executable = resolve_agent_executable(provider)
     if not executable:
         return None
     _profile_name, models = configured_models(profile)

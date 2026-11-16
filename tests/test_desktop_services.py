@@ -24,7 +24,7 @@ class DesktopConfigurationServicesTest(unittest.TestCase):
 
     @patch("desktop.services.codex_rate_limits")
     @patch("desktop.services.agent_authentication", return_value=True)
-    @patch("desktop.services.shutil.which", return_value="/usr/bin/codex")
+    @patch("desktop.services.resolve_agent_executable", return_value="/usr/bin/codex")
     @patch("desktop.services.summarize_usage")
     def test_codex_usage_combines_local_totals_and_remaining_allowance(
         self, summary, _which, _authenticated, limits,
@@ -71,7 +71,7 @@ class DesktopConfigurationServicesTest(unittest.TestCase):
         self.assertEqual(run.call_args.args[0], ["/usr/bin/claude", "auth", "status"])
 
     @patch("desktop.services.agent_authentication", return_value=True)
-    @patch("desktop.services.shutil.which", return_value="/usr/bin/codex")
+    @patch("desktop.services.resolve_agent_executable", return_value="/usr/bin/codex")
     def test_issue_assistant_uses_read_only_codex_execution(self, _which, _authenticated) -> None:
         command = assistant_command("codex", "economical", "prompt")
         self.assertIn("read-only", command)

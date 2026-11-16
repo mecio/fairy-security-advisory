@@ -1743,7 +1743,7 @@ class MainWindow(QMainWindow):
 
     def login_agent(self, provider: str) -> None:
         """Open the provider's official interactive login in a visible terminal."""
-        executable = shutil.which(provider)
+        executable = services.resolve_agent_executable(provider)
         if not executable:
             self.install_component(provider)
             return

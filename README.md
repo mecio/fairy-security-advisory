@@ -80,14 +80,18 @@ option 6 to build the initial inventory.
 
 At least one terminal agent is required only for the complete advisory analysis:
 
-- Codex CLI: `npm install -g @openai/codex@latest` —
+- Codex CLI: the GUI uses OpenAI's standalone installer under `~/.local/bin`
+  and `~/.codex`, without requiring Node.js or npm —
   [official OpenAI documentation](https://developers.openai.com/cookbook/examples/codex/using_goals_in_codex);
 - Claude Code: `npm install -g @anthropic-ai/claude-code@latest` —
   [official Claude Code documentation](https://code.claude.com/docs/en/getting-started).
 
-The project launcher displays these commands but does not execute them. After
-installation, authenticate the CLI account with its official interactive
-command and verify the result:
+The project launcher displays the exact reviewed command and does not execute
+it without confirmation. The Codex installer runs non-interactively so it
+leaves copies bundled with PhpStorm, VS Code, or other IDEs untouched. fAIry
+prefers `~/.local/bin/codex` for its own checks, while each IDE remains free to
+use its managed copy. After installation, authenticate the CLI account with its
+official interactive command and verify the result:
 
 ```bash
 # OpenAI Codex

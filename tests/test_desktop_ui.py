@@ -56,8 +56,13 @@ class DesktopWindowTest(unittest.TestCase):
             window.status_table.item(row, 0).text(): row
             for row in range(window.status_table.rowCount())
         }
-        self.assertIsNotNone(window.status_table.cellWidget(optional_rows["osv-scanner"], 3))
-        self.assertIsNotNone(window.status_table.cellWidget(optional_rows["trivy"], 3))
+        for component in ("osv-scanner", "trivy"):
+            row = optional_rows[component]
+            action = window.status_table.cellWidget(row, 3)
+            if window.status_table.item(row, 1).text() == "Ready":
+                self.assertIsNone(action)
+            else:
+                self.assertIsNotNone(action)
         self.assertIsNotNone(window.status_table.cellWidget(optional_rows["Configuration backup"], 3))
         self.assertIn("Version: 0.1.2", window.about_metadata.text())
         self.assertEqual(

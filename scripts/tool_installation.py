@@ -9,10 +9,63 @@ import platform
 import re
 import shutil
 import subprocess
+import os
 from pathlib import Path
 
 
 OSV_MINIMUM_GO = (1, 26, 2)
+
+
+def resolve_agent_executable(provider: str) -> str | None:
+    """Prefer a stable user CLI without replacing an IDE-managed executable."""
+    user_candidate = Path.home() / ".local" / "bin" / provider
+    if user_candidate.is_file() and os.access(user_candidate, os.X_OK):
+        return str(user_candidate)
+    return shutil.which(provider)
+
+
+def codex_standalone_installation() -> dict[str, str]:
+    """Return the official standalone installer in non-destructive mode."""
+    installer = "https://github.com/openai/codex/releases/latest/download/install.sh"
+    if shutil.which("curl"):
+        download = (
+            'curl --fail --location --proto "=https" --tlsv1.2 '
+            f'-o "$tmp_dir/install.sh" "{installer}"'
+        )
+    elif shutil.which("wget"):
+        download = f'wget --https-only -O "$tmp_dir/install.sh" "{installer}"'
+    else:
+        return {
+            "command": "See the official Codex installation documentation.",
+            "documentation": (
+                "https://developers.openai.com/cookbook/examples/codex/"
+                "using_goals_in_codex#quickstart-using-goals"
+            ),
+            "note": "The standalone installer requires curl or wget.",
+            "blocked": (
+                "Neither curl nor wget is available, so the official standalone "
+                "installer cannot be downloaded safely."
+            ),
+        }
+    command = " && \\\n".join((
+        'tmp_dir="$(mktemp -d)"',
+        "trap 'rm -rf \"$tmp_dir\"' EXIT",
+        download,
+        'CODEX_NON_INTERACTIVE=1 sh "$tmp_dir/install.sh"',
+        '"$HOME/.local/bin/codex" --version',
+    ))
+    return {
+        "command": command,
+        "documentation": (
+            "https://developers.openai.com/cookbook/examples/codex/"
+            "using_goals_in_codex#quickstart-using-goals"
+        ),
+        "note": (
+            "Uses OpenAI's official standalone installer. It installs the user copy "
+            "under ~/.local/bin and ~/.codex without Node.js or npm. Non-interactive "
+            "mode leaves IDE-managed and other existing Codex installations untouched."
+        ),
+    }
 
 
 def go_toolchain_status() -> tuple[bool, str]:
@@ -91,12 +144,9 @@ def installation_plan(component: str) -> dict[str, str] | None:
     """Return a reviewed command and official documentation for a component."""
     distro_id, distro_like = linux_distribution()
     family = {distro_id, *distro_like}
+    if component == "codex":
+        return codex_standalone_installation()
     fixed = {
-        "codex": {
-            "command": "npm install -g @openai/codex@latest",
-            "documentation": "https://developers.openai.com/codex/cli/",
-            "note": "Requires Node.js and npm. Authenticate Codex after installation.",
-        },
         "claude": {
             "command": "npm install -g @anthropic-ai/claude-code@latest",
             "documentation": "https://code.claude.com/docs/en/getting-started",

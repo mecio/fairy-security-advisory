@@ -18,7 +18,7 @@ from typing import Any
 
 import yaml
 
-from scripts.tool_installation import installation_plan
+from scripts.tool_installation import installation_plan, resolve_agent_executable
 from scripts.configuration import (
     CONFIG_SPECS, effective_config_path, factory_for_local, initialize_local_overrides,
     restore_local_override,
@@ -398,7 +398,7 @@ def ai_model(provider: str, profile: str) -> str:
 
 def agent_authentication(provider: str, executable: str | None = None) -> bool:
     """Check CLI authentication without exposing account metadata or credentials."""
-    command = executable or shutil.which(provider)
+    command = executable or resolve_agent_executable(provider)
     if not command:
         return False
     arguments = (
@@ -428,7 +428,7 @@ def agent_authentication(provider: str, executable: str | None = None) -> bool:
 
 def agent_component_status(provider: str) -> tuple[str, str, str]:
     """Return installation and account-authentication status for one AI CLI."""
-    executable = shutil.which(provider)
+    executable = resolve_agent_executable(provider)
     authenticated = agent_authentication(provider, executable) if executable else False
     state = "Ready" if authenticated else ("Login required" if executable else "Missing")
     detail = (
@@ -458,7 +458,7 @@ def agent_usage_status(provider: str) -> tuple[str, str]:
     if summary["cost_usd"]:
         local += f" · reported cost ${summary['cost_usd']:.4f}"
     if provider == "codex":
-        executable = shutil.which("codex")
+        executable = resolve_agent_executable("codex")
         snapshot = codex_rate_limits(executable) if executable and agent_authentication("codex", executable) else None
         rate_limits = snapshot.get("rateLimits", {}) if isinstance(snapshot, dict) else {}
         primary = rate_limits.get("primary", {}) if isinstance(rate_limits, dict) else {}
@@ -502,7 +502,7 @@ or evidence. A proposal is never applied without separate user confirmation in t
 
 
 def assistant_command(provider: str, profile: str, prompt: str) -> list[str]:
-    executable = shutil.which(provider)
+    executable = resolve_agent_executable(provider)
     if not executable:
         raise ConfigurationError(f"{provider} CLI is not installed.")
     if not agent_authentication(provider, executable):

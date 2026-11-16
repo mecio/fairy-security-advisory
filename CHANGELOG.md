@@ -13,6 +13,9 @@ and the project intends to use [Semantic Versioning](https://semver.org/).
   x86_64 and arm64, avoiding an unnecessary Go toolchain dependency.
 - The Go-based fallback validates the installed toolchain and blocks execution
   when the prerequisite is missing or incompatible.
+- Codex installation now uses OpenAI's standalone user installer without a
+  Node.js/npm prerequisite, preserves IDE-managed copies, and gives fAIry a
+  stable executable independent of the launching environment.
 
 ## [0.1.2] - 2026-11-16
 

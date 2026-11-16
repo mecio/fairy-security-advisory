@@ -43,7 +43,7 @@ class AdvisorySourceRequestTest(unittest.TestCase):
         self.assertEqual(request.get_method(), "GET")
         self.assertIsNone(request.data)
 
-    @patch("scripts.manage.shutil.which", return_value="/usr/bin/codex")
+    @patch("scripts.manage.resolve_agent_executable", return_value="/usr/bin/codex")
     def test_codex_launch_enables_search(self, _which) -> None:
         self.assertEqual(
             ai_command("codex"),
@@ -53,14 +53,14 @@ class AdvisorySourceRequestTest(unittest.TestCase):
             ],
         )
 
-    @patch("scripts.manage.shutil.which", return_value="/usr/bin/claude")
+    @patch("scripts.manage.resolve_agent_executable", return_value="/usr/bin/claude")
     def test_claude_launch_uses_the_shared_skill_prompt(self, _which) -> None:
         self.assertEqual(
             ai_command("claude"),
             ["/usr/bin/claude", "--model", "haiku", analysis_prompt("claude")],
         )
 
-    @patch("scripts.manage.shutil.which", return_value="/usr/bin/codex")
+    @patch("scripts.manage.resolve_agent_executable", return_value="/usr/bin/codex")
     def test_balanced_profile_selects_terra(self, _which) -> None:
         self.assertEqual(
             ai_command("codex", "balanced")[3],
@@ -75,14 +75,14 @@ class AdvisorySourceRequestTest(unittest.TestCase):
         prompt = analysis_prompt("codex", "fast")
         self.assertIn("at most 5", prompt)
 
-    @patch("scripts.manage.shutil.which", return_value="/usr/bin/codex")
+    @patch("scripts.manage.resolve_agent_executable", return_value="/usr/bin/codex")
     def test_codex_non_interactive_command_uses_exec(self, _which) -> None:
         command = ai_command("codex", non_interactive=True)
         self.assertEqual(command[:3], ["/usr/bin/codex", "--search", "exec"])
         self.assertIn("--approve-for-me", command)
         self.assertIn("--json", command)
 
-    @patch("scripts.manage.shutil.which", return_value="/usr/bin/claude")
+    @patch("scripts.manage.resolve_agent_executable", return_value="/usr/bin/claude")
     def test_claude_non_interactive_command_uses_print_mode(self, _which) -> None:
         command = ai_command("claude", non_interactive=True)
         self.assertIn("--print", command)
