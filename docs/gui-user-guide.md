@@ -374,6 +374,11 @@ Before sending a message:
 3. choose the appropriate model profile;
 4. review the issue context shown by the interface.
 
+The affected project is displayed first in a dedicated, high-contrast heading.
+The activity ID, advisory/CVE, priority, status, owner, and next action remain in
+a separate context block, reducing the risk of discussing or updating the wrong
+project when several open activities have similar identifiers.
+
 The prompt contains the selected stable ID, project, advisory/CVE, priority,
 owner, status, next action, and recent local conversation history. It does not
 automatically provide every file from the affected project. The agent may use

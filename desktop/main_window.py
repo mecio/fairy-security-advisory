@@ -760,12 +760,41 @@ class MainWindow(QMainWindow):
         controls.addWidget(self.assistant_profile_combo)
         layout.addLayout(controls)
 
+        context_card = QFrame()
+        context_card.setObjectName("card")
+        context_layout = QHBoxLayout(context_card)
+        context_layout.setContentsMargins(16, 12, 16, 12)
+        context_layout.setSpacing(20)
+        project_column = QVBoxLayout()
+        project_caption = QLabel("AFFECTED PROJECT")
+        project_caption.setStyleSheet(
+            "color:#7890a8; font-size:11px; font-weight:700; letter-spacing:1px;"
+        )
+        project_column.addWidget(project_caption)
+        self.assistant_project_label = QLabel("No project selected")
+        self.assistant_project_label.setFont(QFont("Sans Serif", 18, QFont.Weight.Bold))
+        self.assistant_project_label.setWordWrap(True)
+        self.assistant_project_label.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+        )
+        self.assistant_project_label.setStyleSheet("color:#63e7ff; padding:2px 0 4px 0;")
+        project_column.addWidget(self.assistant_project_label)
+        context_layout.addLayout(project_column, 2)
+        separator = QFrame()
+        separator.setFrameShape(QFrame.Shape.VLine)
+        separator.setStyleSheet("color:#24415b;")
+        context_layout.addWidget(separator)
         self.assistant_issue_details = QLabel("No open follow-up activity selected.")
         self.assistant_issue_details.setWordWrap(True)
-        self.assistant_issue_details.setStyleSheet(
-            "background:#10243d; border:1px solid #24415b; border-radius:6px; padding:8px; color:#c9dded;"
+        self.assistant_issue_details.setTextFormat(Qt.TextFormat.RichText)
+        self.assistant_issue_details.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
         )
-        layout.addWidget(self.assistant_issue_details)
+        self.assistant_issue_details.setStyleSheet(
+            "color:#c9dded; padding:2px 4px;"
+        )
+        context_layout.addWidget(self.assistant_issue_details, 3)
+        layout.addWidget(context_card)
 
         self.assistant_conversation = QTextBrowser()
         self.assistant_conversation.setPlaceholderText(
@@ -1458,8 +1487,8 @@ class MainWindow(QMainWindow):
         self.assistant_issue_combo.clear()
         for issue in services.open_followup_activities():
             label = (
-                f"{issue.get('ID', 'unknown')} · {issue.get('Project', 'unknown')} · "
-                f"{issue.get('Priority', 'unknown')} · {issue.get('Status', 'unknown')}"
+                f"{issue.get('Project', 'unknown')}  |  {issue.get('ID', 'unknown')}  |  "
+                f"{issue.get('Priority', 'unknown')}  |  {issue.get('Status', 'unknown')}"
             )
             self.assistant_issue_combo.addItem(label, issue)
             if issue.get("ID") == current_id:
@@ -1476,6 +1505,7 @@ class MainWindow(QMainWindow):
         self.pending_issue_update = None
         self.assistant_apply_button.setEnabled(False)
         if not issue:
+            self.assistant_project_label.setText("No project selected")
             self.assistant_issue_details.setText("No open follow-up activity selected.")
             self.assistant_conversation.clear()
             self.assistant_send_button.setEnabled(False)
@@ -1483,10 +1513,24 @@ class MainWindow(QMainWindow):
         self.assistant_send_button.setEnabled(
             self.chat_process.state() == QProcess.ProcessState.NotRunning
         )
+        project = str(issue.get("Project") or "Unknown project")
+        self.assistant_project_label.setText(project)
+        self.assistant_project_label.setToolTip(project)
+        priority = html.escape(str(issue.get("Priority") or "Unknown"))
+        priority_color = {
+            "critical": "#df7f7f", "high": "#e5bb62", "medium": "#9fd3e5",
+            "low": "#8fd3a4",
+        }.get(priority.casefold(), "#c9dded")
         self.assistant_issue_details.setText(
-            f"{issue.get('ID')} · {issue.get('Project')} · {issue.get('Advisory / CVE')}\n"
-            f"Priority: {issue.get('Priority')} · Status: {issue.get('Status')} · "
-            f"Owner: {issue.get('Owner')}\nNext action: {issue.get('Next action')}"
+            f'<span style="color:#7890a8;">ACTIVITY</span> '
+            f'<b>{html.escape(str(issue.get("ID") or "Unknown"))}</b><br>'
+            f'<span style="color:#7890a8;">ADVISORY</span> '
+            f'<b>{html.escape(str(issue.get("Advisory / CVE") or "Unknown"))}</b><br>'
+            f'<span style="color:{priority_color};"><b>{priority}</b></span> priority &nbsp;·&nbsp; '
+            f'{html.escape(str(issue.get("Status") or "Unknown"))} &nbsp;·&nbsp; '
+            f'Owner: {html.escape(str(issue.get("Owner") or "Unassigned"))}<br>'
+            f'<span style="color:#7890a8;">NEXT</span> '
+            f'{html.escape(str(issue.get("Next action") or "Not specified"))}'
         )
         entries = services.assistant_history(issue.get("ID", "general"))
         if not entries:

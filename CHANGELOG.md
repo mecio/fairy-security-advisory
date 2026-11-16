@@ -19,6 +19,8 @@ and the project intends to use [Semantic Versioning](https://semver.org/).
 - Claude Code installation now uses Anthropic's recommended native user
   installer instead of npm, preserving IDE-managed copies and providing the
   same stable executable resolution used for Codex.
+- The AI issue assistant now gives the affected project a dedicated prominent
+  heading and separates it visually from activity and advisory metadata.
 
 ## [0.1.2] - 2026-11-16
 

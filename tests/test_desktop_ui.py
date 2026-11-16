@@ -339,6 +339,33 @@ class DesktopWindowTest(unittest.TestCase):
         window.deleteLater()
         application.processEvents()
 
+    def test_ai_assistant_emphasizes_the_affected_project(self) -> None:
+        application = QApplication.instance() or QApplication([])
+        window = MainWindow()
+        issue = {
+            "ID": "ADV-DEMO-001",
+            "Project": "payments-api",
+            "Advisory / CVE": "CVE-2026-1234",
+            "Priority": "High",
+            "Status": "Open",
+            "Owner": "Security team",
+            "Next action": "Verify the patched runtime",
+        }
+        window.assistant_issue_combo.clear()
+        window.assistant_issue_combo.addItem(
+            "payments-api  |  ADV-DEMO-001  |  High  |  Open", issue,
+        )
+        window.load_assistant_conversation()
+
+        self.assertEqual(window.assistant_project_label.text(), "payments-api")
+        self.assertGreaterEqual(window.assistant_project_label.font().pointSize(), 18)
+        self.assertIn("ADV-DEMO-001", window.assistant_issue_details.text())
+        self.assertIn("CVE-2026-1234", window.assistant_issue_details.text())
+        self.assertTrue(window.assistant_issue_details.textInteractionFlags())
+        window.close()
+        window.deleteLater()
+        application.processEvents()
+
 
 if __name__ == "__main__":
     unittest.main()
