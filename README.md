@@ -120,6 +120,11 @@ Review the suggested commands and explicitly approve installation before
 running them: they may add system repositories, download binaries, or require
 `sudo` privileges.
 
+For OSV-Scanner on Linux x86_64 and arm64, the GUI prefers the official
+precompiled release, verifies its published SHA-256 checksum, and installs it
+under `~/.local/bin` without `sudo` or Go. The Go-based fallback is enabled only
+after confirming that a compatible toolchain is actually available.
+
 ### Desktop application
 
 The optional graphical branch is isolated under `desktop/` and uses PySide6

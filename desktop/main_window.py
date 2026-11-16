@@ -1804,6 +1804,20 @@ class MainWindow(QMainWindow):
                 f"No automatic installation plan is available for {component} on this system.",
             )
             return
+        if plan.get("blocked"):
+            dialog = QMessageBox(self)
+            dialog.setIcon(QMessageBox.Icon.Warning)
+            dialog.setWindowTitle(f"Cannot install {component} safely")
+            dialog.setText(f"{plan['blocked']}\n\nNo installation command will be executed.")
+            dialog.setDetailedText(plan["command"])
+            documentation_button = dialog.addButton(
+                "Open official documentation", QMessageBox.ButtonRole.ActionRole,
+            )
+            dialog.addButton(QMessageBox.StandardButton.Cancel)
+            dialog.exec()
+            if dialog.clickedButton() == documentation_button:
+                QDesktopServices.openUrl(QUrl(plan["documentation"]))
+            return
         dialog = QMessageBox(self)
         dialog.setIcon(QMessageBox.Icon.Warning)
         dialog.setWindowTitle(f"Install {component}")

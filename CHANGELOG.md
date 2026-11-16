@@ -7,6 +7,13 @@ and the project intends to use [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- OSV-Scanner installation now prefers checksummed official Linux binaries on
+  x86_64 and arm64, avoiding an unnecessary Go toolchain dependency.
+- The Go-based fallback validates the installed toolchain and blocks execution
+  when the prerequisite is missing or incompatible.
+
 ## [0.1.2] - 2026-11-16
 
 ### Added

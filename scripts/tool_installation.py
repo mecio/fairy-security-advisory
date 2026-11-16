@@ -5,7 +5,70 @@
 
 from __future__ import annotations
 
+import platform
+import re
+import shutil
+import subprocess
 from pathlib import Path
+
+
+OSV_MINIMUM_GO = (1, 26, 2)
+
+
+def go_toolchain_status() -> tuple[bool, str]:
+    """Return whether the installed Go toolchain can build current OSV-Scanner."""
+    executable = shutil.which("go")
+    if not executable:
+        return False, "Go is not installed or is not available in PATH."
+    try:
+        result = subprocess.run(
+            [executable, "version"], capture_output=True, text=True, timeout=5,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError) as error:
+        return False, f"Unable to inspect the Go toolchain: {error}"
+    match = re.search(r"\bgo(\d+)\.(\d+)(?:\.(\d+))?\b", result.stdout)
+    if result.returncode != 0 or not match:
+        return False, "The installed Go version could not be determined."
+    version = tuple(int(part or 0) for part in match.groups())
+    rendered = ".".join(str(part) for part in version)
+    required = ".".join(str(part) for part in OSV_MINIMUM_GO)
+    if version < OSV_MINIMUM_GO:
+        return False, f"Go {rendered} is installed, but OSV-Scanner requires Go {required} or newer."
+    return True, f"Compatible Go toolchain detected: Go {rendered}."
+
+
+def osv_binary_installation() -> tuple[str, str] | None:
+    """Build a checksummed per-user install for an official Linux release binary."""
+    architecture = {
+        "x86_64": "amd64",
+        "amd64": "amd64",
+        "aarch64": "arm64",
+        "arm64": "arm64",
+    }.get(platform.machine().lower())
+    if not architecture:
+        return None
+    missing = [name for name in ("curl", "sha256sum", "install") if not shutil.which(name)]
+    if missing:
+        return None
+    asset = f"osv-scanner_linux_{architecture}"
+    base = "https://github.com/google/osv-scanner/releases/latest/download"
+    command = " && \\\n".join((
+        'tmp_dir="$(mktemp -d)"',
+        "trap 'rm -rf \"$tmp_dir\"' EXIT",
+        f'curl --fail --location --proto "=https" --tlsv1.2 -o "$tmp_dir/{asset}" "{base}/{asset}"',
+        f'curl --fail --location --proto "=https" --tlsv1.2 -o "$tmp_dir/osv-scanner_SHA256SUMS" "{base}/osv-scanner_SHA256SUMS"',
+        f'(cd "$tmp_dir" && grep -E "[[:space:]]+{asset}$" osv-scanner_SHA256SUMS | sha256sum --check -)',
+        'install -d -m 0755 "$HOME/.local/bin"',
+        f'install -m 0755 "$tmp_dir/{asset}" "$HOME/.local/bin/osv-scanner"',
+        '"$HOME/.local/bin/osv-scanner" --version',
+    ))
+    note = (
+        f"Uses the official precompiled Linux {architecture} release, verifies its "
+        "published SHA-256 checksum, and installs it under ~/.local/bin. "
+        "No Go toolchain or administrator privileges are required."
+    )
+    return command, note
 
 
 def linux_distribution() -> tuple[str, set[str]]:
@@ -63,18 +126,36 @@ def installation_plan(component: str) -> dict[str, str] | None:
     if component == "osv-scanner":
         if "arch" in family:
             command = "sudo pacman -S osv-scanner"
+            note = "Installs OSV-Scanner from the configured Arch Linux package repositories."
         elif "alpine" in family:
             command = "sudo apk add osv-scanner"
+            note = "Installs OSV-Scanner from the configured Alpine Linux package repositories."
         else:
-            command = (
-                'mkdir -p "$HOME/.local/bin" && '
-                'GOBIN="$HOME/.local/bin" go install '
-                "github.com/google/osv-scanner/v2/cmd/osv-scanner@latest"
-            )
+            binary = osv_binary_installation()
+            if binary:
+                command, note = binary
+            else:
+                compatible, status = go_toolchain_status()
+                command = (
+                    'mkdir -p "$HOME/.local/bin" && '
+                    'GOBIN="$HOME/.local/bin" go install '
+                    "github.com/google/osv-scanner/v2/cmd/osv-scanner@latest"
+                )
+                note = status
+                if not compatible:
+                    return {
+                        "command": command,
+                        "documentation": "https://google.github.io/osv-scanner/installation/",
+                        "note": status,
+                        "blocked": (
+                            "No safe automatic installation is available for this architecture. "
+                            f"{status} Review the official release instructions before continuing."
+                        ),
+                    }
         return {
             "command": command,
             "documentation": "https://google.github.io/osv-scanner/installation/",
-            "note": "The Go-based installation requires a compatible Go toolchain.",
+            "note": note,
         }
 
     if component == "trivy":

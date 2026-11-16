@@ -22,7 +22,13 @@ Alpine Linux:
 sudo apk add osv-scanner
 ```
 
-Other Linux distributions with a supported Go version:
+On Linux x86_64 and arm64, the desktop installer prefers the official
+precompiled release. It downloads both the binary and the published checksum,
+verifies SHA-256, and installs only for the current user under
+`~/.local/bin/osv-scanner`. It does not require Go or administrator privileges.
+
+For architectures without an official precompiled binary, a supported Go
+toolchain may be used:
 
 ```bash
 go install github.com/google/osv-scanner/v2/cmd/osv-scanner@latest
@@ -35,6 +41,7 @@ Official container alternative:
 docker pull ghcr.io/google/osv-scanner:latest
 ```
 
+The application checks the installed Go version before enabling this fallback.
 Verify the current Go requirement in the
 [official OSV-Scanner documentation](https://google.github.io/osv-scanner/installation/).
 

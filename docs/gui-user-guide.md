@@ -601,7 +601,11 @@ interactive Claude session.
 OSV-Scanner and Trivy are optional. Review and copy the Linux installation
 command shown by fAIry, or continue without the scanner and retain the reported
 analysis limitation. fAIry never installs these tools automatically during a
-security check.
+security check. On Linux x86_64 and arm64, the OSV-Scanner action downloads the
+official precompiled release, verifies its published SHA-256 checksum, and
+installs it under `~/.local/bin` without `sudo` or a Go toolchain. On other
+architectures, fAIry validates the Go prerequisite and blocks execution when
+the toolchain is missing or incompatible.
 
 ### A report looks incomplete
 
