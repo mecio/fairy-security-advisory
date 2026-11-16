@@ -15,6 +15,8 @@ import time
 from pathlib import Path
 from typing import Any, Iterable
 
+import yaml
+
 
 ROOT = Path(__file__).resolve().parent.parent
 USAGE_FILE = ROOT / "output/ai-usage/events.jsonl"
@@ -25,6 +27,17 @@ TRANSIENT_CODEX_ENV_VARS = frozenset({
     "CODEX_THREAD_ID",
     "CODEX_TOOL_CALL_ID",
 })
+
+
+def project_version(metadata_path: Path = ROOT / "VERSION.yaml") -> str:
+    """Use the public version metadata for the Codex app-server client identity."""
+    try:
+        metadata = yaml.safe_load(metadata_path.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError):
+        return "0.0.0"
+    if not isinstance(metadata, dict):
+        return "0.0.0"
+    return str(metadata.get("version") or "0.0.0")
 
 
 def agent_subprocess_environment(
@@ -213,7 +226,7 @@ def codex_rate_limits(executable: str, timeout: float = 6.0) -> dict[str, Any] |
     try:
         requests = (
             {"id": 1, "method": "initialize", "params": {
-                "clientInfo": {"name": "fairy-security-advisory", "version": "0.1.2"},
+                "clientInfo": {"name": "fairy-security-advisory", "version": project_version()},
                 "capabilities": {"experimentalApi": True},
             }},
             {"id": 2, "method": "account/rateLimits/read", "params": {

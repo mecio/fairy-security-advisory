@@ -263,7 +263,7 @@ class DesktopConfigurationServicesTest(unittest.TestCase):
     def test_project_metadata_is_loaded_from_the_version_file(self) -> None:
         metadata = project_metadata()
         self.assertEqual(metadata["name"], "fAIry Security Advisory")
-        self.assertEqual(metadata["version"], "0.1.2")
+        self.assertEqual(metadata["version"], "0.2.0")
         self.assertEqual(metadata["author"], "Graziano Ugenti <gucw@proton.me>")
         self.assertEqual(metadata["last_modified_year"], "2026")
 

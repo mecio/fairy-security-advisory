@@ -186,7 +186,11 @@ class DesktopWindowTest(unittest.TestCase):
             window.deleteLater()
             application.processEvents()
 
-    def test_report_reset_requires_confirmation_and_refreshes_the_view(self) -> None:
+    @patch(
+        "desktop.main_window.services.report_entries",
+        return_value=[("Demonstration report", Path("/tmp/fairy-demo-report.md"))],
+    )
+    def test_report_reset_requires_confirmation_and_refreshes_the_view(self, _entries) -> None:
         application = QApplication.instance() or QApplication([])
         window = MainWindow()
         with patch(
@@ -364,7 +368,11 @@ class DesktopWindowTest(unittest.TestCase):
             ],
         )
         self.assertGreater(window.inventory_tree.topLevelItemCount(), 0)
-        self.assertGreater(window.report_list.count(), 0)
+        if window.report_list.count():
+            self.assertTrue(window.reset_reports_button.isEnabled())
+        else:
+            self.assertIn("No reports yet", window.report_viewer.toPlainText())
+            self.assertFalse(window.reset_reports_button.isEnabled())
         self.assertEqual(window.status_table.columnCount(), 4)
         self.assertIn(
             "applies only to Inventory projects whose AI preference is ‘-’",
@@ -382,10 +390,10 @@ class DesktopWindowTest(unittest.TestCase):
             else:
                 self.assertIsNotNone(action)
         self.assertIsNotNone(window.status_table.cellWidget(optional_rows["Configuration backup"], 3))
-        self.assertIn("Version: 0.1.2", window.about_metadata.text())
+        self.assertIn("Version: 0.2.0", window.about_metadata.text())
         self.assertEqual(
             window.footer_identity.text(),
-            "Version 0.1.2  ·  License AGPL-3.0-or-later",
+            "Version 0.2.0  ·  License AGPL-3.0-or-later",
         )
         buttons = {button.text(): button for button in window.findChildren(QPushButton)}
         self.assertEqual(buttons["Save settings"].property("variant"), "success")

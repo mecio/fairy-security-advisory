@@ -7,6 +7,8 @@ and the project intends to use [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-16
+
 ### Added
 
 - Run check now presents an animated fAIry workflow linked to actual check and
@@ -99,5 +101,6 @@ and the project intends to use [Semantic Versioning](https://semver.org/).
 - Backup import validates paths, declared members, sizes, hashes, and YAML.
 - Scanned projects remain read-only throughout analysis.
 
-[Unreleased]: https://github.com/mecio/fairy-security-advisory/compare/v0.1.2...HEAD
+[Unreleased]: https://github.com/mecio/fairy-security-advisory/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/mecio/fairy-security-advisory/compare/v0.1.2...v0.2.0
 [0.1.2]: https://github.com/mecio/fairy-security-advisory/releases/tag/v0.1.2

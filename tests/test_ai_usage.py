@@ -11,11 +11,18 @@ from unittest.mock import patch
 
 from scripts.ai_usage import (
     TRANSIENT_CODEX_ENV_VARS, append_cli_diagnostic, append_usage_record,
-    load_usage_records, run_tracked_command, summarize_usage, usage_from_event,
+    load_usage_records, project_version, run_tracked_command, summarize_usage,
+    usage_from_event,
 )
 
 
 class AIUsageTest(unittest.TestCase):
+    def test_codex_client_version_comes_from_version_metadata(self) -> None:
+        with TemporaryDirectory() as directory:
+            metadata = Path(directory) / "VERSION.yaml"
+            metadata.write_text("version: 0.2.0\n", encoding="utf-8")
+            self.assertEqual(project_version(metadata), "0.2.0")
+
     @patch.dict("os.environ", {
         "CODEX_SESSION_ID": "parent-session",
         "CODEX_SANDBOX_NETWORK_DISABLED": "1",
