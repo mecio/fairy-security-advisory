@@ -4,8 +4,9 @@
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
+from unittest.mock import patch
 
-from scripts.inventory import discover_projects, iter_project_files, matches_exclude
+from scripts.inventory import build_inventory, discover_projects, iter_project_files, matches_exclude
 
 
 class ProjectRootExclusionsTest(unittest.TestCase):
@@ -37,6 +38,40 @@ class ProjectRootExclusionsTest(unittest.TestCase):
         self.assertTrue(
             matches_exclude(Path("vendor"), ("**/vendor/**",), directory=True)
         )
+
+    def test_inventory_refresh_preserves_local_advisory_preferences(self) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            existing = root / "existing"
+            new = root / "new"
+            existing.mkdir()
+            new.mkdir()
+            config = {
+                "project_roots": [{"path": str(root), "enabled": True, "exclude": []}],
+                "inventory": {
+                    "max_files_per_project": 100,
+                    "projects": [{
+                        "path": str(existing),
+                        "advisory_checks": {"enabled": False, "preferred_ai": "claude"},
+                    }],
+                },
+            }
+
+            def analyzed(path, _root, _exclude, _limit):
+                return {"id": path.name, "path": str(path)}
+
+            with patch(
+                "scripts.inventory.discover_projects", return_value=[existing, new],
+            ), patch("scripts.inventory.analyze_project", side_effect=analyzed):
+                projects = build_inventory(config)
+
+            by_id = {project["id"]: project for project in projects}
+            self.assertEqual(by_id["existing"]["advisory_checks"], {
+                "enabled": False, "preferred_ai": "claude",
+            })
+            self.assertEqual(by_id["new"]["advisory_checks"], {
+                "enabled": True, "preferred_ai": None,
+            })
 
 
 if __name__ == "__main__":

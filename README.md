@@ -155,7 +155,8 @@ The desktop application provides:
 - dedicated Codex and Claude CLI account tabs with install, login, and refresh
   actions that never store provider credentials, plus local per-provider usage
   totals and the remaining Codex allowance when the installed CLI exposes it;
-- a read-only technology inventory browser;
+- a technology inventory browser with local per-project advisory inclusion and
+  optional Codex/Claude preference;
 - rendered daily reports and summary, plus an interactive follow-up table with
   primary-source links for advisories and CVEs;
 - an AI issue assistant linked to one open follow-up ID and project at a time;
@@ -292,6 +293,15 @@ Each `exclude` entry is a glob evaluated relative to its `project_roots[].path`.
 Matching directories are not traversed, and matching files are not included in
 the generated inventory. A leading `**/` also matches at the root level.
 
+After discovery, the desktop **Technology inventory** page provides a **Check**
+checkbox for each local project and a **Preferred AI** selector with `-`,
+`Codex`, and `Claude`. Unchecked projects remain inventoried but are excluded
+from advisory correlation, dependency checks, OSV-Scanner/Trivy targets, and
+new follow-up activities. `-` is the default and means no provider preference;
+Codex or Claude is a soft preference and does not override the agent explicitly
+chosen for a complete analysis. These settings are stored only in the ignored
+`config/local/projects.yaml` and survive inventory refreshes.
+
 Supported advisory source types are `html`, `rss`, `atom`, `json`, `api`, and
 `repository`. Each source declares its name, URL, category or filter,
 technologies, priority, and active status.
@@ -373,7 +383,8 @@ Invoke in Claude Code with:
 The shared skill reads the configuration, refreshes the inventory when
 necessary, checks active sources, verifies primary sources, correlates manifests
 and lockfiles, incorporates OSV-Scanner/Trivy results when available, and
-updates reports and follow-ups.
+updates reports and follow-ups. It analyzes only inventory projects selected
+for advisory checks; per-project AI selections are treated as preferences.
 
 ## Usage
 

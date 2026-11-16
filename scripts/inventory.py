@@ -408,6 +408,13 @@ def analyze_project(
 
 def build_inventory(config: dict[str, Any]) -> list[dict[str, Any]]:
     limit = int(config.get("inventory", {}).get("max_files_per_project", 20000))
+    previous_preferences: dict[str, dict[str, Any]] = {}
+    for previous in config.get("inventory", {}).get("projects", []):
+        if not isinstance(previous, dict) or not previous.get("path"):
+            continue
+        settings = previous.get("advisory_checks", {})
+        if isinstance(settings, dict):
+            previous_preferences[str(previous["path"])] = settings
     projects: dict[Path, tuple[Path, tuple[str, ...]]] = {}
     for item in config.get("project_roots", []):
         if not isinstance(item, dict) or not item.get("enabled", True):
@@ -419,10 +426,17 @@ def build_inventory(config: dict[str, Any]) -> list[dict[str, Any]]:
             existing = projects.get(project)
             if existing is None or len(root.parts) > len(existing[0].parts):
                 projects[project] = (root, exclude_patterns)
-    return [
-        analyze_project(project, root, exclude_patterns, limit)
-        for project, (root, exclude_patterns) in sorted(projects.items(), key=lambda item: str(item[0]))
-    ]
+    inventory: list[dict[str, Any]] = []
+    for project, (root, exclude_patterns) in sorted(projects.items(), key=lambda item: str(item[0])):
+        result = analyze_project(project, root, exclude_patterns, limit)
+        previous = previous_preferences.get(str(project), {})
+        preferred_ai = previous.get("preferred_ai")
+        result["advisory_checks"] = {
+            "enabled": bool(previous.get("enabled", True)),
+            "preferred_ai": preferred_ai if preferred_ai in {"codex", "claude"} else None,
+        }
+        inventory.append(result)
+    return inventory
 
 
 def main() -> int:

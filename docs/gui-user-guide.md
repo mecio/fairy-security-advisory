@@ -291,11 +291,24 @@ subscription remainder.
 
 ## Technology inventory
 
-The Technology inventory page is a read-only view of the structured inventory
-stored in local configuration. Each row identifies a detected project, its
-probable roles, and technologies supported by file, manifest, lockfile, or
-configuration evidence. Roles such as frontend, backend, infrastructure, or
-mixed are classification aids rather than access permissions.
+The Technology inventory page shows the structured inventory stored in local
+configuration. Each row identifies a detected project, its probable roles, and
+technologies supported by file, manifest, lockfile, or configuration evidence.
+Roles such as frontend, backend, infrastructure, or mixed are classification
+aids rather than access permissions. Technical discovery fields are read-only;
+only the local advisory selection and AI preference can be changed here.
+
+Use the checkbox in **Check** to decide whether a project belongs to the active
+advisory-analysis scope. A cleared checkbox excludes that project from advisory
+correlation, manifest and lockfile inspection, OSV-Scanner and Trivy targets,
+new findings, and new follow-up activities. It remains visible and refreshable
+in the inventory so that it can be selected again later.
+
+**Preferred AI** accepts **-**, **Codex**, or **Claude**. The default **-** means
+that no per-project provider preference is specified. Codex and Claude are soft
+routing preferences: they do not install or start another agent automatically,
+and the provider selected for a complete analysis remains authoritative. Click
+**Save project choices** to write these choices to ignored local configuration.
 
 The inventory can include languages and versions, frameworks, runtimes,
 package manifests, lockfiles, databases, web servers, reverse proxies,
@@ -312,6 +325,10 @@ changing exclusions, or making significant dependency changes. The refresh:
 3. inspects relevant files without modifying them;
 4. writes the resulting structured inventory only to ignored local
    configuration.
+
+Refreshing preserves saved project checkboxes and preferred-AI choices for
+projects that are detected at the same path. Newly discovered projects are
+selected by default and use **-** as their AI preference.
 
 The scanner does not update dependencies, run project installers, or rewrite
 manifests. Paths shown here are local operational data and must not be copied

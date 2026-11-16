@@ -22,4 +22,7 @@ inventory:
   generated_at: null
   refresh_after_hours: 168
   max_files_per_project: 20000
+  # Detected projects receive local-only advisory_checks settings after discovery:
+  # advisory_checks: {enabled: true, preferred_ai: null}
+  # preferred_ai may be null, codex, or claude. These choices survive inventory refreshes.
   projects: []

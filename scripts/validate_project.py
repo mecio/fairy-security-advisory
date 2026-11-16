@@ -118,6 +118,26 @@ def main() -> int:
         exclude = project_root.get("exclude", [])
         if not isinstance(exclude, list) or any(not isinstance(pattern, str) for pattern in exclude):
             fail(f"project root {index}: exclude must be a list of glob strings", errors)
+    inventory_projects = projects_config.get("inventory", {}).get("projects", [])
+    if not isinstance(inventory_projects, list):
+        fail("inventory.projects must be a list", errors)
+        inventory_projects = []
+    for index, project in enumerate(inventory_projects, start=1):
+        if not isinstance(project, dict):
+            fail(f"inventory project {index}: must be a mapping", errors)
+            continue
+        advisory_checks = project.get("advisory_checks", {})
+        if not isinstance(advisory_checks, dict):
+            fail(f"inventory project {index}: advisory_checks must be a mapping", errors)
+            continue
+        if "enabled" in advisory_checks and not isinstance(advisory_checks["enabled"], bool):
+            fail(f"inventory project {index}: advisory_checks.enabled must be a boolean", errors)
+        if advisory_checks.get("preferred_ai") not in {None, "codex", "claude"}:
+            fail(
+                f"inventory project {index}: advisory_checks.preferred_ai must be "
+                "null, codex, or claude",
+                errors,
+            )
     required_source_keys = {"id", "name", "url", "type", "technologies", "priority", "active"}
     for index, source in enumerate(sources_config.get("advisory_sources", []), start=1):
         missing = required_source_keys - set(source)
@@ -204,8 +224,13 @@ def main() -> int:
         for error in errors:
             print(f"ERROR: {error}", file=sys.stderr)
         return 1
-    count = len(projects_config.get("inventory", {}).get("projects", []))
-    print(f"Configuration valid; inventoried projects: {count}")
+    count = len(inventory_projects)
+    selected = sum(
+        project.get("advisory_checks", {}).get("enabled", True)
+        for project in inventory_projects
+        if isinstance(project, dict) and isinstance(project.get("advisory_checks", {}), dict)
+    )
+    print(f"Configuration valid; inventoried projects: {count} ({selected} selected)")
     return 0
 
 

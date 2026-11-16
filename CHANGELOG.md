@@ -9,6 +9,9 @@ and the project intends to use [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- Technology inventory projects can now be included or excluded from advisory
+  analysis individually and assigned an optional Codex or Claude preference;
+  local choices survive inventory refreshes.
 - OSV-Scanner installation now prefers checksummed official Linux binaries on
   x86_64 and arm64, avoiding an unnecessary Go toolchain dependency.
 - The Go-based fallback validates the installed toolchain and blocks execution

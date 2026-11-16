@@ -11,7 +11,8 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 try:
     from PySide6.QtCore import QUrl
-    from PySide6.QtWidgets import QApplication, QPushButton
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QApplication, QComboBox, QMessageBox, QPushButton
     from desktop import services
     from desktop.main_window import BarChartCard, MainWindow
 except ImportError:
@@ -20,10 +21,48 @@ except ImportError:
     MainWindow = None
     QPushButton = None
     QUrl = None
+    Qt = None
 
 
 @unittest.skipUnless(QApplication is not None, "optional PySide6 dependency is not installed")
 class DesktopWindowTest(unittest.TestCase):
+    def test_inventory_supports_project_selection_and_preferred_ai(self) -> None:
+        application = QApplication.instance() or QApplication([])
+        with patch("desktop.main_window.services.inventory_projects", return_value=[{
+            "id": "api",
+            "path": "/private/api",
+            "roles": ["backend"],
+            "languages": [{"name": "Python"}],
+            "advisory_checks": {"enabled": False, "preferred_ai": "claude"},
+        }]), patch("desktop.main_window.services.inventory_age", return_value="current"):
+            window = MainWindow()
+            window.load_inventory()
+
+        self.assertEqual(window.inventory_tree.columnCount(), 6)
+        item = window.inventory_tree.topLevelItem(0)
+        selector = window.inventory_tree.itemWidget(item, 2)
+        self.assertEqual(item.checkState(0), Qt.CheckState.Unchecked)
+        self.assertIsInstance(selector, QComboBox)
+        self.assertEqual(
+            [selector.itemText(index) for index in range(selector.count())],
+            ["-", "Codex", "Claude"],
+        )
+        self.assertEqual(selector.currentData(), "claude")
+
+        item.setCheckState(0, Qt.CheckState.Checked)
+        selector.setCurrentIndex(selector.findData("codex"))
+        with patch("desktop.main_window.services.update_inventory_preferences") as save, patch(
+            "desktop.main_window.QMessageBox.information",
+            return_value=QMessageBox.StandardButton.Ok,
+        ), patch("desktop.main_window.services.inventory_projects", return_value=[]):
+            window.save_inventory_preferences()
+        save.assert_called_once_with({
+            "/private/api": {"enabled": True, "preferred_ai": "codex"},
+        })
+        window.close()
+        window.deleteLater()
+        application.processEvents()
+
     def test_chart_entries_receive_distinct_colors(self) -> None:
         application = QApplication.instance() or QApplication([])
         chart = BarChartCard("Test")

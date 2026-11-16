@@ -9,15 +9,37 @@ from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
 
+import yaml
+
 from desktop.services import (
     ConfigurationError, agent_authentication, agent_usage_status, assistant_command,
     extract_issue_update, project_metadata,
     followup_source_links, proposal_changes, security_statistics, update_followup_activity,
     restore_factory_configuration, validate_config_text, write_config_text,
+    update_inventory_preferences,
 )
 
 
 class DesktopConfigurationServicesTest(unittest.TestCase):
+    def test_inventory_preferences_are_written_only_to_local_configuration(self) -> None:
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "projects.yaml"
+            path.write_text(
+                "schema_version: 1\ninventory:\n  projects:\n"
+                "    - id: api\n      path: /private/api\n",
+                encoding="utf-8",
+            )
+            with patch("desktop.services.effective_config_path", return_value=path):
+                update_inventory_preferences({
+                    "/private/api": {"enabled": False, "preferred_ai": "codex"},
+                })
+
+            updated = yaml.safe_load(path.read_text(encoding="utf-8"))
+            self.assertEqual(updated["inventory"]["projects"][0]["advisory_checks"], {
+                "enabled": False, "preferred_ai": "codex",
+            })
+            self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
+
     def test_factory_restore_rejects_paths_outside_local_configuration(self) -> None:
         with self.assertRaises(ConfigurationError):
             restore_factory_configuration(Path("/tmp/reports.yaml"))

@@ -157,6 +157,31 @@ def inventory_projects() -> list[dict[str, Any]]:
     return [project for project in projects if isinstance(project, dict)]
 
 
+def update_inventory_preferences(preferences: dict[str, dict[str, Any]]) -> None:
+    """Persist per-project advisory selection in the ignored local inventory."""
+    config_path = effective_config_path(CONFIG_DIR, "projects.example.yaml")
+    if config_path == EXAMPLE_CONFIG:
+        raise ConfigurationError("Initialize local configuration before saving inventory choices.")
+    data = load_yaml(config_path)
+    projects = data.get("inventory", {}).get("projects", [])
+    if not isinstance(projects, list):
+        raise ConfigurationError("The local inventory project list is invalid.")
+    for project in projects:
+        if not isinstance(project, dict):
+            continue
+        preference = preferences.get(str(project.get("path", "")))
+        if preference is None:
+            continue
+        preferred_ai = preference.get("preferred_ai")
+        if preferred_ai not in {None, "", "codex", "claude"}:
+            raise ConfigurationError(f"Unsupported preferred AI: {preferred_ai}")
+        project["advisory_checks"] = {
+            "enabled": bool(preference.get("enabled", True)),
+            "preferred_ai": preferred_ai or None,
+        }
+    write_config_text(config_path, dump_config_data(data), private=True)
+
+
 def inventory_age() -> str:
     generated_at = inventory().get("generated_at")
     if not generated_at:

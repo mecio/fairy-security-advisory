@@ -668,17 +668,23 @@ class MainWindow(QMainWindow):
 
     def _inventory_page(self) -> QWidget:
         page, layout = self._page(
-            "Technology inventory", "Read-only view of projects and detected technologies from the ignored local configuration.",
+            "Technology inventory",
+            "Choose which detected projects receive advisory checks and optionally prefer an AI. Technical discovery remains read-only.",
         )
         self.inventory_tree = QTreeWidget()
-        self.inventory_tree.setHeaderLabels(("Project", "Roles", "Technologies", "Path"))
+        self.inventory_tree.setHeaderLabels((
+            "Check", "Project", "Preferred AI", "Roles", "Technologies", "Path",
+        ))
         self.inventory_tree.setAlternatingRowColors(True)
         self.inventory_tree.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
-        self.inventory_tree.setStyleSheet("QTreeWidget::item { min-height: 24px; }")
-        self.inventory_tree.header().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
-        self.inventory_tree.header().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
-        self.inventory_tree.header().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
-        self.inventory_tree.header().setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
+        self.inventory_tree.setStyleSheet("QTreeWidget::item { min-height: 32px; padding:2px; }")
+        for column in (0, 1, 2, 3):
+            self.inventory_tree.header().setSectionResizeMode(
+                column, QHeaderView.ResizeMode.ResizeToContents,
+            )
+        self.inventory_tree.header().setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)
+        self.inventory_tree.header().setSectionResizeMode(5, QHeaderView.ResizeMode.Stretch)
+        self.inventory_tree.itemChanged.connect(self.update_inventory_count)
         layout.addWidget(self.inventory_tree, 1)
         buttons = QHBoxLayout()
         reload_button = QPushButton("Reload inventory view")
@@ -689,6 +695,10 @@ class MainWindow(QMainWindow):
         scan.setProperty("variant", "warning")
         scan.clicked.connect(self.refresh_inventory)
         buttons.addWidget(scan)
+        save_preferences = QPushButton("Save project choices")
+        save_preferences.setProperty("variant", "success")
+        save_preferences.clicked.connect(self.save_inventory_preferences)
+        buttons.addWidget(save_preferences)
         buttons.addStretch()
         self.inventory_count = QLabel()
         buttons.addWidget(self.inventory_count)
@@ -1281,17 +1291,68 @@ class MainWindow(QMainWindow):
         )
 
     def load_inventory(self) -> None:
+        self.inventory_tree.blockSignals(True)
         self.inventory_tree.clear()
         projects = services.inventory_projects()
         for project in projects:
+            settings = project.get("advisory_checks", {})
+            if not isinstance(settings, dict):
+                settings = {}
             item = QTreeWidgetItem((
+                "",
                 str(project.get("id", "unnamed")),
+                "",
                 ", ".join(map(str, project.get("roles", []))),
                 ", ".join(services.technology_names(project)),
                 str(project.get("path", "")),
             ))
+            item.setData(0, Qt.ItemDataRole.UserRole, str(project.get("path", "")))
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            item.setCheckState(
+                0, Qt.CheckState.Checked
+                if settings.get("enabled", True) else Qt.CheckState.Unchecked,
+            )
             self.inventory_tree.addTopLevelItem(item)
-        self.inventory_count.setText(f"{len(projects)} projects · inventory {services.inventory_age()}")
+            preference = QComboBox()
+            preference.addItem("-", "")
+            preference.addItem("Codex", "codex")
+            preference.addItem("Claude", "claude")
+            selected = preference.findData(settings.get("preferred_ai") or "")
+            preference.setCurrentIndex(max(0, selected))
+            preference.setToolTip("Optional preferred AI for this project's advisory analysis")
+            self.inventory_tree.setItemWidget(item, 2, preference)
+        self.inventory_tree.blockSignals(False)
+        self.update_inventory_count()
+
+    def update_inventory_count(self, _item: QTreeWidgetItem | None = None, _column: int = 0) -> None:
+        total = self.inventory_tree.topLevelItemCount()
+        enabled = sum(
+            self.inventory_tree.topLevelItem(index).checkState(0) == Qt.CheckState.Checked
+            for index in range(total)
+        )
+        self.inventory_count.setText(
+            f"{enabled} of {total} selected · inventory {services.inventory_age()}"
+        )
+
+    def save_inventory_preferences(self) -> None:
+        preferences: dict[str, dict[str, object]] = {}
+        for index in range(self.inventory_tree.topLevelItemCount()):
+            item = self.inventory_tree.topLevelItem(index)
+            selector = self.inventory_tree.itemWidget(item, 2)
+            preferences[str(item.data(0, Qt.ItemDataRole.UserRole) or "")] = {
+                "enabled": item.checkState(0) == Qt.CheckState.Checked,
+                "preferred_ai": selector.currentData() if isinstance(selector, QComboBox) else None,
+            }
+        try:
+            services.update_inventory_preferences(preferences)
+        except (OSError, ValueError, services.ConfigurationError) as error:
+            QMessageBox.critical(self, "Unable to save project choices", str(error))
+            return
+        self.load_inventory()
+        QMessageBox.information(
+            self, "Project choices saved",
+            "Advisory inclusion and preferred AI choices were saved in ignored local configuration.",
+        )
 
     def refresh_inventory(self) -> None:
         if QMessageBox.question(
