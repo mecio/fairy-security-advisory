@@ -8,7 +8,8 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from scripts.manage import (
-    ANALYSIS_PROGRESS_PREFIX, ai_command, analysis_prompt, emit_analysis_progress,
+    ANALYSIS_PROGRESS_PREFIX, ai_command, analysis_prompt, consolidation_prompt,
+    emit_analysis_progress,
     render_cli_banner, run_ai_check,
     scoped_evidence_prompt, source_request, validate_canonical_report_updates,
 )
@@ -196,6 +197,17 @@ class AdvisorySourceRequestTest(unittest.TestCase):
         self.assertIn("Do not modify files", prompt)
         self.assertIn("do not run OSV-Scanner or Trivy", prompt)
         self.assertNotIn("run the complete security advisory check", prompt)
+
+    def test_all_analysis_phases_ignore_report_reset_snapshots(self) -> None:
+        prompts = (
+            analysis_prompt("codex", "economical"),
+            scoped_evidence_prompt("claude", [{"id": "api", "path": "/projects/api"}]),
+            consolidation_prompt("codex", Path("output/analysis-runs/plan.json"), []),
+        )
+        for prompt in prompts:
+            with self.subTest(prompt=prompt[:40]):
+                self.assertIn("Do not read output/report-resets/", prompt)
+                self.assertIn("manual backups, not current evidence", prompt)
 
     @patch("scripts.manage.prepare_analysis_service", return_value=True)
     @patch("scripts.manage.check_prerequisites", return_value=0)

@@ -25,6 +25,8 @@ and the project intends to use [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- Clear reports now leaves a manual reset snapshot that subsequent AI checks
+  ignore; new reports and follow-up are rebuilt from current evidence only.
 - The Run check fairy now faces incoming sources and projects, turns toward
   matching, and casts an animated wand trail during consolidation.
 - Successful terminal handoffs close the desktop window automatically; active

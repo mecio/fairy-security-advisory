@@ -546,8 +546,9 @@ scanned projects. Empty archive folders are removed automatically.
 In **Reports**, **Clear reports and follow-up…** moves current daily reports,
 summary, active follow-up, and closed-issue archives to a private snapshot below
 `output/report-resets/`. This empties the current report view so a complete AI
-check can rebuild it. The agent consults reset snapshots for previous issue
-states and stable IDs; the reset does not invalidate confirmed resolutions.
+check can rebuild it. Reset snapshots are manual backups and are not consulted
+by the next check. Previous issue IDs and resolution states are not carried
+forward automatically; production status still requires independent evidence.
 Analysis logs, configuration, inventory, and scanned projects remain in place.
 
 Agent processes are detached from transient Codex IDE/session variables before

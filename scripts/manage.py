@@ -96,6 +96,10 @@ AI_PROMPTS = {
     "codex": "$fairy-security-advisory run the complete security advisory check",
     "claude": "/fairy-security-advisory run the complete security advisory check",
 }
+RESET_ARCHIVE_BOUNDARY = (
+    "Do not read output/report-resets/ during this check. Those snapshots are "
+    "manual backups, not current evidence or follow-up state."
+)
 ANALYSIS_PROGRESS_PREFIX = "::fairy-analysis-progress::"
 
 
@@ -824,7 +828,10 @@ def execution_guidance(execution_mode: str | None = None) -> str:
 
 
 def analysis_prompt(provider: str, execution_mode: str | None = None) -> str:
-    return f"{AI_PROMPTS[provider]}\n\n{execution_guidance(execution_mode)}"
+    return (
+        f"{AI_PROMPTS[provider]}\n\n{RESET_ARCHIVE_BOUNDARY}\n\n"
+        f"{execution_guidance(execution_mode)}"
+    )
 
 
 def scoped_evidence_prompt(
@@ -842,6 +849,7 @@ def scoped_evidence_prompt(
         "self-contained Markdown dossier containing checked sources, candidate and "
         "excluded advisories, manifest/lockfile evidence, applicability, risk, confidence, "
         "recommended actions, and limitations. Include the project ID with every finding.\n\n"
+        f"{RESET_ARCHIVE_BOUNDARY}\n\n"
         + execution_guidance(execution_mode)
     )
 
@@ -865,9 +873,9 @@ def consolidation_prompt(
         "Explain each project's evidence, disposition, and limitations; do not "
         "treat a read-only dossier as outside scope merely because another provider "
         "collected it. "
-        "If output/report-resets/ has snapshots, consult their follow-up and "
-        "closed-issue archives, newest first, for historical status and stable IDs; a reset is "
-        "not new evidence that a previously resolved issue is vulnerable again. "
+        f"{RESET_ARCHIVE_BOUNDARY} After a reset, rebuild current reports from "
+        "fresh evidence and current files only. Do not infer production status "
+        "from source code or a local development runtime. "
         "OSV-Scanner and Trivy may be used only against paths in the selected groups. "
         "Record provider/model routing and any failed or missing dossier as a limitation.\n\n"
         f"Analysis plan: {plan_path}\nOther-provider dossiers:\n{dossier_lines}\n\n"

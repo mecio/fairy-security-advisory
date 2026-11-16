@@ -192,9 +192,10 @@ class DesktopWindowTest(unittest.TestCase):
         with patch(
             "desktop.main_window.QMessageBox.question",
             return_value=QMessageBox.StandardButton.No,
-        ), patch("desktop.main_window.services.archive_and_reset_reports") as reset:
+        ) as question, patch("desktop.main_window.services.archive_and_reset_reports") as reset:
             window.reset_reports_for_recheck()
             reset.assert_not_called()
+            self.assertIn("It will not read the snapshot", question.call_args.args[2])
 
         with patch(
             "desktop.main_window.QMessageBox.question",

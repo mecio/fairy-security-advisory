@@ -381,9 +381,11 @@ explicit confirmation, it moves the current summary, daily reports, active
 follow-up, and closed-issue archives into a private timestamped directory under
 `output/report-resets/`. The Reports view and dashboard then start empty. The
 next complete AI check rebuilds the current files from the selected inventory
-and advisory evidence. The agent consults reset snapshots for earlier
-status decisions and stable IDs; clearing the view alone is not evidence that
-a resolved issue has become vulnerable again. Analysis logs, configuration,
+and new advisory evidence. Reset snapshots remain available as manual backups,
+but the agent does not read them during the next check. Previous issue IDs and
+resolution states are not carried forward automatically. Clearing the view
+alone is not evidence that a resolved issue has become vulnerable again.
+Analysis logs, configuration,
 inventory, and scanned projects are preserved. The action refuses to reset
 files while an analysis or AI conversation is running.
 

@@ -1717,9 +1717,9 @@ class MainWindow(QMainWindow):
             f"Move {count} local report and follow-up file(s) into a private reset "
             "snapshot and clear the Reports view?\n\n"
             "This includes open issues and closed-issue archives. The next complete "
-            "AI check can rebuild them from current evidence. Previous resolution "
-            "states remain available to the agent in the snapshot. Analysis logs "
-            "and configuration are preserved.",
+            "AI check rebuilds them from current evidence. It will not read the "
+            "snapshot; previous issue IDs and resolution states are not carried "
+            "forward automatically. Analysis logs and configuration are preserved.",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
         ) != QMessageBox.StandardButton.Yes:

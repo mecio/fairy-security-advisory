@@ -14,9 +14,9 @@ Run a repeatable, evidence-based, read-only check against inventoried projects. 
    falling back to the versioned factory files in `config/`,
    `output/followup.md`, archived follow-ups under
    `output/followup-archive/YYYY/MM.md` when present, and the latest daily report under
-   `output/daily-advisory-check/` in full. If `output/report-resets/` contains
-   snapshots, consult their follow-up and closed-issue archives, newest first,
-   for historical status evidence. Their files are not current findings.
+   `output/daily-advisory-check/` in full. Treat `output/report-resets/` as a
+   manual backup archive: do not read it during an advisory check. After
+   **Clear reports and follow-up**, use only current files and new evidence.
    If the local project configuration is missing, explain how to copy
    `config/projects.example.yaml` as documented
    in the README; never invent local paths.
@@ -58,13 +58,13 @@ Run a repeatable, evidence-based, read-only check against inventoried projects. 
    hints; verify their actual use and version before claiming applicability.
 6. If `osv-scanner` or `trivy` is available, use it read-only on relevant targets and record the command, version, and summary. If missing, run the validator and show the suggested Linux commands, making clear that execution requires review and explicit authorization; read [references/linux-tool-installation.md](references/linux-tool-installation.md) when explaining alternatives. Do not install tools or update databases/caches without an explicit request, and do not treat an automated finding as proven applicability.
 7. Evaluate actual API use, reachability, configuration, and mitigations. Classify each item as `immediate-action`, `follow-up`, `monitor`, or `not-applicable`, with risk and confidence.
-8. Review open activities in the local follow-up. Do not reopen an activity
-   recorded as externally resolved without new evidence. After a report reset,
-   carry still-open work into the new follow-up with stable IDs and dates only
-   when it remains applicable to selected projects; retain historical closure
-   decisions as context rather than new open findings. Keep vulnerability
-   closure, mitigations, runtime migrations, and other remediation work as
-   separate activities when their evidence or completion criteria differ.
+8. Review open activities in the current local follow-up and current closed-issue
+   archive. Do not reopen an activity recorded as externally resolved without
+   new evidence. After a report reset, do not recover old activities, IDs, or
+   closure decisions from reset snapshots; rebuild current records only from
+   new evidence. Keep vulnerability closure, mitigations, runtime migrations,
+   and other remediation work as separate activities when their evidence or
+   completion criteria differ.
 
 ## Output
 
