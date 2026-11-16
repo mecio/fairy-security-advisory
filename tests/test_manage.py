@@ -2,17 +2,36 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
 import unittest
+import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from scripts.manage import (
-    ai_command, analysis_prompt, render_cli_banner, run_ai_check,
+    ANALYSIS_PROGRESS_PREFIX, ai_command, analysis_prompt, emit_analysis_progress,
+    render_cli_banner, run_ai_check,
     scoped_evidence_prompt, source_request,
 )
 
 
 class AdvisorySourceRequestTest(unittest.TestCase):
+    @patch.dict("os.environ", {"FAIRY_GUI_PROGRESS": "1"})
+    @patch("builtins.print")
+    def test_analysis_progress_event_is_machine_readable(self, output) -> None:
+        emit_analysis_progress(
+            phase="evidence", status="running", provider="claude",
+            completed=2, total=5, active_projects=3,
+            message="Collecting read-only evidence",
+        )
+
+        line = output.call_args.args[0]
+        self.assertTrue(line.startswith(ANALYSIS_PROGRESS_PREFIX))
+        event = json.loads(line[len(ANALYSIS_PROGRESS_PREFIX):])
+        self.assertEqual(event["provider"], "claude")
+        self.assertEqual(event["completed"], 2)
+        self.assertEqual(event["active_projects"], 3)
+        self.assertTrue(output.call_args.kwargs["flush"])
+
     def test_cli_banner_is_plain_ascii_without_color(self) -> None:
         banner = render_cli_banner(color=False, width=100)
         self.assertIn("fAIry Security Advisory", banner)

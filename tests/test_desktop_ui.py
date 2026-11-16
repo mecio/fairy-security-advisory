@@ -26,6 +26,39 @@ except ImportError:
 
 @unittest.skipUnless(QApplication is not None, "optional PySide6 dependency is not installed")
 class DesktopWindowTest(unittest.TestCase):
+    def test_ai_analysis_progress_is_visible_across_pages(self) -> None:
+        application = QApplication.instance() or QApplication([])
+        window = MainWindow()
+        window._start_analysis_activity()
+        self.assertTrue(window.global_analysis_label.isVisibleTo(window.statusBar()))
+        self.assertEqual(window.analysis_project_progress.maximum(), 0)
+
+        marker = (
+            '::fairy-analysis-progress::{"phase":"evidence","status":"running",'
+            '"provider":"claude","completed":2,"total":5,"active_projects":3,'
+            '"message":"Collecting read-only evidence"}'
+        )
+        self.assertTrue(window._consume_analysis_progress_line(marker))
+        self.assertEqual(window.analysis_project_progress.maximum(), 5)
+        self.assertEqual(window.analysis_project_progress.value(), 2)
+        self.assertIn("Claude", window.analysis_activity_label.text())
+        self.assertIn("3 projects", window.analysis_activity_label.text())
+        self.assertNotIn(marker, window.log.toPlainText())
+
+        window.navigation.setCurrentRow(0)
+        application.processEvents()
+        self.assertFalse(window.global_analysis_label.isHidden())
+        window._handle_analysis_progress({
+            "phase": "complete", "status": "completed", "provider": "codex",
+            "completed": 5, "total": 5, "active_projects": 0,
+            "message": "Analysis completed",
+        })
+        self.assertEqual(window.analysis_project_progress.value(), 5)
+        self.assertIn("completed", window.analysis_activity_label.text().casefold())
+        window.close()
+        window.deleteLater()
+        application.processEvents()
+
     def test_logs_page_reads_archives_and_deletes_only_selected_run(self) -> None:
         application = QApplication.instance() or QApplication([])
         with TemporaryDirectory() as directory:

@@ -506,10 +506,26 @@ The selected profile determines the model. The selected execution mode controls
 parallel source work and sub-agent limits. Economical is the default for both
 because it reduces consumption and makes routine checks easier to repeat.
 
-The output pane streams progress and the final exit code. A successful process
-exit indicates that the command completed, not that every advisory was resolved;
-review the report's limitations and incomplete controls. **Clear log** removes
-only the visible process text from the widget.
+The activity card identifies the active AI provider and current phase, shows
+elapsed time, and counts completed projects. During preparation the progress bar
+is indeterminate. It becomes determinate as soon as the private routing plan is
+ready, then advances when an assigned provider group has completed successfully.
+It does not invent an internal percentage while Codex or Claude is still
+processing one request, because their CLIs do not expose dependable per-project
+progress within that request.
+
+A compact copy of the loader and progress bar remains in the application footer,
+so it is safe to open Dashboard, Reports, Logs, or another page while analysis
+continues. The footer reports evidence collection or consolidation and names the
+active provider. Completion or failure remains visible briefly, while the full
+result stays in the Run check output and the private Logs archive.
+
+The output pane streams ordinary process messages and the final exit code;
+machine-readable progress events are rendered by the activity card instead of
+cluttering the log. A successful process exit indicates that the command
+completed, not that every advisory was resolved; review the report's limitations
+and incomplete controls. **Clear log** removes only the visible process text
+from the widget.
 
 **Stop** first requests graceful process termination. If the process does not
 exit promptly, the desktop application may force it to stop. A stopped run can

@@ -9,6 +9,9 @@ and the project intends to use [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- Complete desktop analyses now show the active Codex or Claude provider,
+  current phase, elapsed time, and verified project-group progress in both the
+  Run check page and a cross-page footer indicator.
 - Technology inventory projects can now be included or excluded from advisory
   analysis individually and routed to Codex or Claude; `-` inherits the launch
   coordinator, local choices survive inventory refreshes, provider evidence is

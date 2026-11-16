@@ -170,7 +170,8 @@ The desktop application provides:
 - private local configuration backups with a manifest and SHA-256 checksum;
 - an About section populated from the public `VERSION.yaml` metadata file;
 - execution of validation, source checks, inventory refresh, pre-publication
-  checks, and complete Codex or Claude analyses with streamed logs.
+  checks, and complete Codex or Claude analyses with streamed logs, a persistent
+  active-agent loader, elapsed time, and project-group progress.
 
 All GUI implementation files remain under `desktop/`. The command-line
 launcher and AI skills continue to work without PySide6.
@@ -493,6 +494,12 @@ and credentials are never recorded.
 The desktop **Logs** page browses these archives and can permanently delete one
 confirmed run at a time without affecting reports, follow-up, configuration, or
 scanned projects. Empty archive folders are removed automatically.
+
+While an analysis is running, the desktop footer remains visible on every page
+and identifies the active provider and phase. The Run check page also shows
+elapsed time and completed projects. Progress advances only at verified
+provider-group boundaries because Codex and Claude do not expose a dependable
+per-project percentage while a single CLI request is running.
 
 The Python scripts deterministically build the inventory and routing plan,
 validate prerequisites, isolate evidence, and coordinate provider execution.

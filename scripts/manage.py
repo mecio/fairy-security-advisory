@@ -90,6 +90,30 @@ AI_PROMPTS = {
     "codex": "$fairy-security-advisory run the complete security advisory check",
     "claude": "/fairy-security-advisory run the complete security advisory check",
 }
+ANALYSIS_PROGRESS_PREFIX = "::fairy-analysis-progress::"
+
+
+def emit_analysis_progress(
+    *, phase: str, status: str, provider: str | None = None,
+    completed: int = 0, total: int = 0, active_projects: int = 0,
+    message: str = "",
+) -> None:
+    """Emit one machine-readable GUI progress event on standard output."""
+    if os.environ.get("FAIRY_GUI_PROGRESS") != "1":
+        return
+    event = {
+        "phase": phase,
+        "status": status,
+        "provider": provider,
+        "completed": completed,
+        "total": total,
+        "active_projects": active_projects,
+        "message": message,
+    }
+    print(
+        ANALYSIS_PROGRESS_PREFIX + json.dumps(event, separators=(",", ":")),
+        flush=True,
+    )
 AGENT_INSTALLATION = {
     "codex": (
         "Use fAIry's reviewed standalone installation plan.",
@@ -955,6 +979,12 @@ def run_ai_check(
         f"{started_at.isoformat().replace('+00:00', 'Z')} START coordinator={provider} "
         f"profile={profile_name} mode={mode_name}",
     )
+    completed_projects = 0
+    emit_analysis_progress(
+        phase="routing", status="running", provider=provider,
+        completed=0, total=plan["selected_count"],
+        message="Analysis plan ready",
+    )
 
     def finish_run(status: str, exit_code: int) -> int:
         finished_at = dt.datetime.now(dt.timezone.utc)
@@ -1006,8 +1036,18 @@ def run_ai_check(
         if command is None:
             print(f"{worker} CLI is unavailable after prerequisite checks.", file=sys.stderr)
             phase_results.append(f"{worker} evidence — failed (CLI unavailable)")
+            emit_analysis_progress(
+                phase="evidence", status="failed", provider=worker,
+                completed=completed_projects, total=plan["selected_count"],
+                active_projects=len(projects), message="AI CLI unavailable",
+            )
             return finish_run("failed", 1)
         print(f"Collecting read-only {worker} evidence for {len(projects)} project(s)...")
+        emit_analysis_progress(
+            phase="evidence", status="running", provider=worker,
+            completed=completed_projects, total=plan["selected_count"],
+            active_projects=len(projects), message="Collecting read-only evidence",
+        )
         append_private_line(
             log_path,
             f"{dt.datetime.now(dt.timezone.utc).isoformat().replace('+00:00', 'Z')} "
@@ -1029,12 +1069,23 @@ def run_ai_check(
                 f"PHASE_FINISH provider={worker} type=evidence status=failed "
                 f"exit_code={result or 1}",
             )
+            emit_analysis_progress(
+                phase="evidence", status="failed", provider=worker,
+                completed=completed_projects, total=plan["selected_count"],
+                active_projects=len(projects), message="Evidence collection failed",
+            )
             return finish_run("failed", result or 1)
+        completed_projects += len(projects)
         phase_results.append(f"{worker} evidence — completed (exit 0)")
         append_private_line(
             log_path,
             f"{dt.datetime.now(dt.timezone.utc).isoformat().replace('+00:00', 'Z')} "
             f"PHASE_FINISH provider={worker} type=evidence status=completed exit_code=0",
+        )
+        emit_analysis_progress(
+            phase="evidence", status="completed", provider=worker,
+            completed=completed_projects, total=plan["selected_count"],
+            message="Evidence group completed",
         )
         dossiers.append(dossier)
     command = ai_command(
@@ -1044,10 +1095,21 @@ def run_ai_check(
     if command is None:
         print(f"{provider} CLI is unavailable after prerequisite checks.", file=sys.stderr)
         phase_results.append(f"{provider} consolidation — failed (CLI unavailable)")
+        emit_analysis_progress(
+            phase="consolidation", status="failed", provider=provider,
+            completed=completed_projects, total=plan["selected_count"],
+            active_projects=len(plan["groups"][provider]), message="AI CLI unavailable",
+        )
         return finish_run("failed", 1)
     print(
         f"Consolidating with {provider} ({models[provider]}) for "
         f"{len(plan['groups'][provider])} directly assigned project(s)..."
+    )
+    emit_analysis_progress(
+        phase="consolidation", status="running", provider=provider,
+        completed=completed_projects, total=plan["selected_count"],
+        active_projects=len(plan["groups"][provider]),
+        message="Consolidating evidence and updating reports",
     )
     append_private_line(
         log_path,
@@ -1067,6 +1129,14 @@ def run_ai_check(
         f"{dt.datetime.now(dt.timezone.utc).isoformat().replace('+00:00', 'Z')} "
         f"PHASE_FINISH provider={provider} type=consolidation status={phase_status} "
         f"exit_code={result}",
+    )
+    emit_analysis_progress(
+        phase="complete" if result == 0 else "consolidation",
+        status="completed" if result == 0 else "failed", provider=provider,
+        completed=plan["selected_count"] if result == 0 else completed_projects,
+        total=plan["selected_count"],
+        active_projects=0 if result == 0 else len(plan["groups"][provider]),
+        message="Analysis completed" if result == 0 else "Consolidation failed",
     )
     return finish_run("completed" if result == 0 else "failed", result)
 

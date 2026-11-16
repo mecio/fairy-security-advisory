@@ -6,11 +6,13 @@
 from __future__ import annotations
 
 import html
+import json
 import shlex
 import shutil
+import time
 from pathlib import Path
 
-from PySide6.QtCore import QProcess, Qt, QTimer, QUrl
+from PySide6.QtCore import QProcess, QProcessEnvironment, Qt, QTimer, QUrl
 from PySide6.QtGui import (
     QCloseEvent, QDesktopServices, QFont, QPixmap, QTextCursor, QTextDocument,
 )
@@ -204,6 +206,9 @@ class MainWindow(QMainWindow):
         self.process = QProcess(self)
         self.process.setWorkingDirectory(str(services.ROOT))
         self.process.setProcessChannelMode(QProcess.ProcessChannelMode.MergedChannels)
+        process_environment = QProcessEnvironment.systemEnvironment()
+        process_environment.insert("FAIRY_GUI_PROGRESS", "1")
+        self.process.setProcessEnvironment(process_environment)
         self.process.readyReadStandardOutput.connect(self._read_process_output)
         self.process.finished.connect(self._process_finished)
         self.chat_process = QProcess(self)
@@ -213,6 +218,15 @@ class MainWindow(QMainWindow):
         self.chat_process.finished.connect(self._chat_finished)
         self.chat_response = ""
         self.pending_issue_update: tuple[str, dict[str, str]] | None = None
+        self.current_action: str | None = None
+        self.process_output_buffer = ""
+        self.analysis_activity_base = ""
+        self.analysis_started_at: float | None = None
+        self.analysis_activity_generation = 0
+        self.analysis_spinner_index = 0
+        self.analysis_activity_timer = QTimer(self)
+        self.analysis_activity_timer.setInterval(250)
+        self.analysis_activity_timer.timeout.connect(self._update_analysis_activity_clock)
         self.config_editors: dict[Path, QPlainTextEdit] = {}
         self.report_paths: dict[int, Path] = {}
         self.log_run_files: list[Path] = []
@@ -274,6 +288,14 @@ class MainWindow(QMainWindow):
             f"Version {metadata['version']}  ·  License {metadata['license']}"
         )
         self.footer_identity.setObjectName("footerIdentity")
+        self.global_analysis_progress = QProgressBar()
+        self.global_analysis_progress.setFixedWidth(150)
+        self.global_analysis_progress.setTextVisible(False)
+        self.global_analysis_progress.setVisible(False)
+        self.global_analysis_label = QLabel()
+        self.global_analysis_label.setVisible(False)
+        self.statusBar().addPermanentWidget(self.global_analysis_label)
+        self.statusBar().addPermanentWidget(self.global_analysis_progress)
         self.statusBar().addPermanentWidget(self.footer_identity)
         self.navigation.setCurrentRow(0)
 
@@ -961,6 +983,30 @@ class MainWindow(QMainWindow):
         buttons.addWidget(self.stop_button)
         buttons.addStretch()
         layout.addLayout(buttons)
+
+        activity = QFrame()
+        activity.setObjectName("card")
+        activity_layout = QHBoxLayout(activity)
+        activity_layout.setContentsMargins(14, 10, 14, 10)
+        activity_layout.setSpacing(14)
+        self.analysis_activity_label = QLabel("No AI analysis is running.")
+        self.analysis_activity_label.setMinimumWidth(310)
+        activity_layout.addWidget(self.analysis_activity_label)
+        self.analysis_project_progress = QProgressBar()
+        self.analysis_project_progress.setRange(0, 1)
+        self.analysis_project_progress.setValue(0)
+        self.analysis_project_progress.setFormat("0 / 0 projects")
+        self.analysis_project_progress.setToolTip(
+            "Progress advances when an AI provider completes its assigned project group; "
+            "AI-internal completion percentages are not available."
+        )
+        activity_layout.addWidget(self.analysis_project_progress, 1)
+        self.analysis_elapsed_label = QLabel("")
+        self.analysis_elapsed_label.setMinimumWidth(92)
+        self.analysis_elapsed_label.setAlignment(Qt.AlignmentFlag.AlignRight)
+        activity_layout.addWidget(self.analysis_elapsed_label)
+        layout.addWidget(activity)
+
         self.log = QPlainTextEdit()
         self.log.setReadOnly(True)
         self.log.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
@@ -2199,20 +2245,132 @@ class MainWindow(QMainWindow):
         )
         self.navigation.setCurrentRow(PAGE_RUN)
         self.log.appendPlainText(f"\n$ {shlex.join(command)}\n")
+        self.current_action = action
+        self.process_output_buffer = ""
+        if action == "ai-check":
+            self._start_analysis_activity()
         self.stop_button.setEnabled(True)
         self.statusBar().showMessage(f"Running {action}…")
         self.process.start(command[0], command[1:])
 
     def _read_process_output(self) -> None:
         data = bytes(self.process.readAllStandardOutput()).decode("utf-8", errors="replace")
-        if data:
-            self.log.moveCursor(QTextCursor.MoveOperation.End)
-            self.log.insertPlainText(data)
-            self.log.ensureCursorVisible()
+        if not data:
+            return
+        self.process_output_buffer += data
+        visible_lines: list[str] = []
+        while "\n" in self.process_output_buffer:
+            line, self.process_output_buffer = self.process_output_buffer.split("\n", 1)
+            if not self._consume_analysis_progress_line(line):
+                visible_lines.append(line + "\n")
+        if visible_lines:
+            self._append_process_output("".join(visible_lines))
+
+    def _append_process_output(self, text: str) -> None:
+        self.log.moveCursor(QTextCursor.MoveOperation.End)
+        self.log.insertPlainText(text)
+        self.log.ensureCursorVisible()
+
+    def _consume_analysis_progress_line(self, line: str) -> bool:
+        prefix = "::fairy-analysis-progress::"
+        if not line.startswith(prefix):
+            return False
+        try:
+            event = json.loads(line[len(prefix):])
+        except (json.JSONDecodeError, TypeError):
+            return False
+        if isinstance(event, dict):
+            self._handle_analysis_progress(event)
+            return True
+        return False
+
+    def _start_analysis_activity(self) -> None:
+        self.analysis_activity_generation += 1
+        self.analysis_started_at = time.monotonic()
+        self.analysis_spinner_index = 0
+        self.analysis_activity_base = "Preparing advisory analysis"
+        self.analysis_project_progress.setRange(0, 0)
+        self.analysis_project_progress.setFormat("Preparing…")
+        self.global_analysis_progress.setRange(0, 0)
+        self.global_analysis_label.setVisible(True)
+        self.global_analysis_progress.setVisible(True)
+        self.analysis_activity_timer.start()
+        self._update_analysis_activity_clock()
+
+    def _handle_analysis_progress(self, event: dict[str, object]) -> None:
+        phase = str(event.get("phase") or "analysis").replace("_", " ")
+        status = str(event.get("status") or "running")
+        provider = str(event.get("provider") or "AI").title()
+        completed = max(0, int(event.get("completed") or 0))
+        total = max(0, int(event.get("total") or 0))
+        active = max(0, int(event.get("active_projects") or 0))
+        message = str(event.get("message") or phase.title())
+
+        if total:
+            completed = min(completed, total)
+            for progress in (self.analysis_project_progress, self.global_analysis_progress):
+                progress.setRange(0, total)
+                progress.setValue(completed)
+            self.analysis_project_progress.setFormat(f"{completed} / {total} projects")
+            self.global_analysis_progress.setFormat(f"{completed}/{total}")
+        activity = f"{provider} · {message}"
+        if active:
+            noun = "project" if active == 1 else "projects"
+            activity += f" · {active} {noun}"
+        self.analysis_activity_base = activity
+        self._update_analysis_activity_clock()
+        if status == "failed":
+            self._finish_analysis_activity(False, activity)
+        elif status == "completed" and phase == "complete":
+            self._finish_analysis_activity(True, activity)
+
+    def _update_analysis_activity_clock(self) -> None:
+        if self.analysis_started_at is None:
+            return
+        frames = ("◐", "◓", "◑", "◒")
+        frame = frames[self.analysis_spinner_index % len(frames)]
+        self.analysis_spinner_index += 1
+        text = f"{frame} {self.analysis_activity_base}"
+        self.analysis_activity_label.setText(text)
+        self.global_analysis_label.setText(text)
+        elapsed = max(0, int(time.monotonic() - self.analysis_started_at))
+        minutes, seconds = divmod(elapsed, 60)
+        self.analysis_elapsed_label.setText(f"Elapsed {minutes:02d}:{seconds:02d}")
+
+    def _finish_analysis_activity(self, successful: bool, detail: str = "") -> None:
+        if self.analysis_started_at is None:
+            return
+        self.analysis_activity_timer.stop()
+        state = "Completed" if successful else "Failed"
+        symbol = "✓" if successful else "!"
+        suffix = f" · {detail}" if detail else ""
+        final_text = f"{symbol} Analysis {state.lower()}{suffix}"
+        self.analysis_activity_label.setText(final_text)
+        self.global_analysis_label.setText(final_text)
+        if successful and self.analysis_project_progress.maximum() > 0:
+            maximum = self.analysis_project_progress.maximum()
+            self.analysis_project_progress.setValue(maximum)
+            self.global_analysis_progress.setValue(maximum)
+        self.analysis_started_at = None
+        generation = self.analysis_activity_generation
+        QTimer.singleShot(10000, lambda: self._hide_finished_analysis_activity(generation))
+
+    def _hide_finished_analysis_activity(self, generation: int) -> None:
+        if generation != self.analysis_activity_generation or self.analysis_started_at is not None:
+            return
+        self.global_analysis_label.setVisible(False)
+        self.global_analysis_progress.setVisible(False)
 
     def _process_finished(self, exit_code: int, _status: QProcess.ExitStatus) -> None:
         self._read_process_output()
+        if self.process_output_buffer:
+            if not self._consume_analysis_progress_line(self.process_output_buffer):
+                self._append_process_output(self.process_output_buffer)
+            self.process_output_buffer = ""
         self.log.appendPlainText(f"\nProcess finished with exit code {exit_code}.\n")
+        if self.current_action == "ai-check" and self.analysis_started_at is not None:
+            self._finish_analysis_activity(exit_code == 0)
+        self.current_action = None
         self.stop_button.setEnabled(False)
         self.statusBar().showMessage(
             "Operation completed" if exit_code == 0 else f"Operation failed with exit code {exit_code}", 8000,
@@ -2227,6 +2385,8 @@ class MainWindow(QMainWindow):
     def stop_process(self) -> None:
         if self.process.state() == QProcess.ProcessState.NotRunning:
             return
+        if self.current_action == "ai-check" and self.analysis_started_at is not None:
+            self.analysis_activity_base = "Stopping advisory analysis"
         self.process.terminate()
         QTimer.singleShot(3000, self._kill_if_running)
 
