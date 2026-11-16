@@ -57,8 +57,8 @@ security incidents, or other consequences arising from its use or misuse.
 Clone or download the repository and launch the project command:
 
 ```bash
-git clone <repository-url> security-advisory
-cd security-advisory
+git clone https://github.com/mecio/fairy-security-advisory.git
+cd fairy-security-advisory
 ./fairy-security-advisory
 ```
 
