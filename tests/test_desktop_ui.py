@@ -593,10 +593,10 @@ class DesktopWindowTest(unittest.TestCase):
             else:
                 self.assertIsNotNone(action)
         self.assertIsNotNone(window.status_table.cellWidget(optional_rows["Configuration backup"], 3))
-        self.assertIn("Version: 0.2.0", window.about_metadata.text())
+        self.assertIn("Version: 0.2.1", window.about_metadata.text())
         self.assertEqual(
             window.footer_identity.text(),
-            "Version 0.2.0  ·  License AGPL-3.0-or-later",
+            "Version 0.2.1  ·  License AGPL-3.0-or-later",
         )
         buttons = {button.text(): button for button in window.findChildren(QPushButton)}
         self.assertEqual(buttons["Save settings"].property("variant"), "success")
