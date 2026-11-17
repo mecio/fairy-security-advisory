@@ -30,5 +30,6 @@ inventory:
   # The GUI can also add local-only manual_technologies to detected projects:
   # manual_technologies: [{name: PostgreSQL, category: databases}]
   # They are user-declared context, not verified installed or production versions,
-  # and survive inventory refreshes for projects detected at the same path.
+  # and override matching scanner values until the user explicitly confirms a new
+  # inventory refresh, which replaces both detected and manual technology values.
   projects: []

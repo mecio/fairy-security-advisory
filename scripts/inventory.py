@@ -25,6 +25,11 @@ from typing import Any, Iterable
 import yaml
 
 try:
+    from technology_state import project_technology_records
+except ImportError:
+    from scripts.technology_state import project_technology_records
+
+try:
     from configuration import effective_config_path
 except ImportError:
     from scripts.configuration import effective_config_path
@@ -44,7 +49,7 @@ SECRET_NAMES = {
 PROJECT_MARKERS = {
     "composer.json", "package.json", "pyproject.toml", "requirements.txt",
     "Pipfile", "poetry.lock", "uv.lock", "pom.xml", "build.gradle",
-    "build.gradle.kts", "Gemfile", "go.mod", "Cargo.toml", "Vagrantfile",
+    "build.gradle.kts", "Gemfile", "go.mod", "go.work", "Cargo.toml", "Vagrantfile",
     "docker-compose.yml", "docker-compose.yaml", "compose.yml", "compose.yaml",
 }
 SOURCE_EXTENSIONS = set(EXT for EXT in (
@@ -59,7 +64,7 @@ MANIFEST_NAMES = PROJECT_MARKERS | {
     "pnpm-lock.yaml", "Pipfile.lock", "Cargo.lock", "Gemfile.lock", "go.sum",
 }
 MANUAL_TECH_CATEGORIES = (
-    "languages", "runtimes", "frameworks_and_tooling", "databases",
+    "languages", "runtimes", "dependencies", "frameworks_and_tooling", "databases",
     "web_servers_and_proxies", "containers", "operating_systems", "ci_cd",
     "infrastructure_as_code", "virtualization_and_services", "other",
 )
@@ -99,12 +104,12 @@ def safe_load_yaml(path: Path) -> dict[str, Any]:
     return data
 
 
-def normalize_manual_technologies(values: Any) -> list[dict[str, str]]:
+def normalize_manual_technologies(values: Any) -> list[dict[str, Any]]:
     """Validate user-declared technologies without treating them as scan evidence."""
     if not isinstance(values, list):
         raise ValueError("manual_technologies must be a list")
-    normalized: list[dict[str, str]] = []
-    seen: set[tuple[str, str]] = set()
+    normalized: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str, str, str | None]] = set()
     for index, value in enumerate(values, start=1):
         if not isinstance(value, dict):
             raise ValueError(f"manual technology {index} must be a mapping")
@@ -112,6 +117,9 @@ def normalize_manual_technologies(values: Any) -> list[dict[str, str]]:
         category = value.get("category")
         version = value.get("version", "")
         note = value.get("note", "")
+        ecosystem = value.get("ecosystem", "")
+        exclude = value.get("exclude", False)
+        replaces_version = value.get("replaces_version")
         if not isinstance(name, str) or not name.strip() or len(name.strip()) > 120:
             raise ValueError(f"manual technology {index} needs a name of at most 120 characters")
         if not isinstance(category, str) or category not in MANUAL_TECH_CATEGORIES:
@@ -120,9 +128,24 @@ def normalize_manual_technologies(values: Any) -> list[dict[str, str]]:
             raise ValueError(f"manual technology {index} has an invalid version")
         if not isinstance(note, str) or len(note.strip()) > 500:
             raise ValueError(f"manual technology {index} has an invalid note")
-        if any(ord(character) < 32 for character in name + version + note):
+        if not isinstance(ecosystem, str) or (ecosystem.strip() and (
+            category != "dependencies" or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]{0,31}", ecosystem.strip())
+        )):
+            raise ValueError(f"manual technology {index} has an invalid ecosystem")
+        if not isinstance(exclude, bool) or (exclude and category != "dependencies"):
+            raise ValueError(f"manual technology {index} has an invalid exclusion")
+        if exclude and version.strip():
+            raise ValueError(f"manual technology {index} cannot have both an exclusion and version")
+        if replaces_version is not None and (
+            not isinstance(replaces_version, str) or len(replaces_version.strip()) > 120 or exclude
+        ):
+            raise ValueError(f"manual technology {index} has an invalid replacement target")
+        if any(ord(character) < 32 for character in name + version + note + ecosystem
+               + (replaces_version or "")):
             raise ValueError(f"manual technology {index} contains a control character")
-        key = (category, name.strip().casefold())
+        key = (category, name.strip().casefold(), ecosystem.strip().casefold(),
+               version.strip().casefold(), replaces_version.strip().casefold()
+               if replaces_version is not None else None)
         if key in seen:
             raise ValueError(f"duplicate manual technology: {name.strip()}")
         seen.add(key)
@@ -131,7 +154,18 @@ def normalize_manual_technologies(values: Any) -> list[dict[str, str]]:
             item["version"] = version.strip()
         if note.strip():
             item["note"] = note.strip()
+        if ecosystem.strip():
+            item["ecosystem"] = ecosystem.strip().casefold()
+        if exclude:
+            item["exclude"] = True
+        if replaces_version is not None:
+            item["replaces_version"] = replaces_version.strip()
         normalized.append(item)
+    excluded = {(item["category"], item["name"].casefold(), item.get("ecosystem", ""))
+                for item in normalized if item.get("exclude")}
+    if any((item["category"], item["name"].casefold(), item.get("ecosystem", "")) in excluded
+           and not item.get("exclude") for item in normalized):
+        raise ValueError("a manual dependency cannot be both excluded and versioned")
     return normalized
 
 
@@ -275,10 +309,275 @@ def read_json(path: Path) -> dict[str, Any]:
         return {}
 
 
-def dependency_map(project: Path, files: list[Path]) -> tuple[dict[str, str], list[str], dict[str, str]]:
+def resolved_dependency_records(
+    project: Path, rel_names: dict[str, Path],
+) -> list[dict[str, str]]:
+    """Extract every distinct package/version pair from supported lockfiles."""
+    records: dict[tuple[str, str, str], dict[str, str]] = {}
+
+    def add(
+        name: Any, version: Any, ecosystem: str, *, public_registry: bool = False,
+    ) -> None:
+        name_text = str(name or "").strip()
+        version_text = str(version or "").strip().lstrip("v")
+        if name_text and version_text:
+            record: dict[str, Any] = {
+                "name": name_text, "version": version_text,
+                "source": "resolved-lockfile", "ecosystem": ecosystem,
+            }
+            if public_registry:
+                record["public_registry"] = True
+            record_key = (ecosystem, name_text.casefold(), version_text.casefold())
+            existing = records.get(record_key)
+            if existing and existing.get("public_registry"):
+                record["public_registry"] = True
+            records[record_key] = record
+
+    composer_lock = rel_names.get("composer.lock")
+    if composer_lock:
+        data = read_json(composer_lock)
+        for section in ("packages", "packages-dev"):
+            for package in data.get(section, []) if isinstance(data.get(section), list) else []:
+                if isinstance(package, dict):
+                    add(package.get("name"), package.get("version"), "composer")
+
+    package_lock = rel_names.get("package-lock.json") or rel_names.get("npm-shrinkwrap.json")
+    if package_lock:
+        data = read_json(package_lock)
+        packages = data.get("packages", {})
+        if isinstance(packages, dict):
+            for location, package in packages.items():
+                if not location or not isinstance(package, dict):
+                    continue
+                resolved_url = str(package.get("resolved", ""))
+                add(
+                    package.get("name") or str(location).rsplit("node_modules/", 1)[-1],
+                    package.get("version"), "npm",
+                    public_registry=resolved_url.startswith("https://registry.npmjs.org/"),
+                )
+
+        def visit_npm_dependencies(values: Any) -> None:
+            if not isinstance(values, dict):
+                return
+            for name, package in values.items():
+                if not isinstance(package, dict):
+                    continue
+                resolved_url = str(package.get("resolved", ""))
+                add(
+                    name, package.get("version"), "npm",
+                    public_registry=resolved_url.startswith("https://registry.npmjs.org/"),
+                )
+                visit_npm_dependencies(package.get("dependencies"))
+
+        visit_npm_dependencies(data.get("dependencies"))
+
+    pipfile_lock = rel_names.get("Pipfile.lock")
+    if pipfile_lock:
+        data = read_json(pipfile_lock)
+        for section in ("default", "develop"):
+            values = data.get(section, {})
+            if isinstance(values, dict):
+                for name, package in values.items():
+                    if isinstance(package, dict):
+                        add(name, str(package.get("version", "")).lstrip("="), "pypi")
+
+    for lock_name in ("poetry.lock", "uv.lock", "Cargo.lock"):
+        path = rel_names.get(lock_name)
+        if not path:
+            continue
+        try:
+            data = tomllib.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, tomllib.TOMLDecodeError):
+            continue
+        packages = data.get("package", [])
+        if isinstance(packages, list):
+            for package in packages:
+                if isinstance(package, dict):
+                    ecosystem = "cargo" if lock_name == "Cargo.lock" else "pypi"
+                    add(package.get("name"), package.get("version"), ecosystem)
+
+    pnpm_lock = rel_names.get("pnpm-lock.yaml")
+    if pnpm_lock:
+        try:
+            data = yaml.safe_load(pnpm_lock.read_text(encoding="utf-8")) or {}
+        except (OSError, UnicodeError, yaml.YAMLError):
+            data = {}
+        for section in ("packages", "snapshots"):
+            values = data.get(section, {}) if isinstance(data, dict) else {}
+            if not isinstance(values, dict):
+                continue
+            for raw_key in values:
+                key = str(raw_key).strip("/ ")
+                match = re.match(r"(?P<name>@[^/]+/[^@]+|[^@]+)@(?P<version>[^(_]+)", key)
+                if not match:
+                    match = re.match(
+                        r"(?P<name>@[^/]+/[^/]+|[^/]+)/(?P<version>[^/(_]+)", key,
+                    )
+                if match:
+                    add(match.group("name"), match.group("version"), "npm")
+
+    yarn_lock = rel_names.get("yarn.lock")
+    if yarn_lock:
+        try:
+            lines = yarn_lock.read_text(encoding="utf-8").splitlines()
+        except (OSError, UnicodeError):
+            lines = []
+        selectors: list[str] = []
+        for line in lines:
+            if line and not line[0].isspace() and line.rstrip().endswith(":"):
+                selectors = [part.strip().strip('"\'') for part in line[:-1].split(",")]
+                continue
+            match = re.match(
+                r"\s+version(?:\s+|:\s*)[\"']?([^\"'\s]+)[\"']?", line,
+            )
+            if not match:
+                continue
+            for selector in selectors:
+                offset = selector.rfind("@")
+                if offset > 0:
+                    name = selector[:offset]
+                    if name.endswith("@npm:"):
+                        name = name[:-5]
+                    add(name, match.group(1), "npm")
+
+    gem_lock = rel_names.get("Gemfile.lock")
+    if gem_lock:
+        try:
+            lines = gem_lock.read_text(encoding="utf-8").splitlines()
+        except (OSError, UnicodeError):
+            lines = []
+        for line in lines:
+            match = re.match(r"^    ([A-Za-z0-9_.-]+) \(([^)]+)\)", line)
+            if match:
+                add(match.group(1), match.group(2), "rubygems")
+
+    return sorted(records.values(), key=lambda item: (item["ecosystem"], item["name"].casefold(), item["version"]))
+
+
+def go_directives(path: Path) -> tuple[list[tuple[str, str]], list[tuple[str, str, str, str]], list[str]]:
+    """Read module requirements, replacements, and workspace use paths."""
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeError):
+        return [], [], []
+    requirements: list[tuple[str, str]] = []
+    replacements: list[tuple[str, str, str, str]] = []
+    uses: list[str] = []
+    section = ""
+    for raw in lines:
+        line = raw.split("//", 1)[0].strip()
+        block = re.fullmatch(r"(require|replace|use)\s*\(", line)
+        if block:
+            section = block.group(1)
+            continue
+        if section and line == ")":
+            section = ""
+            continue
+        directive = section
+        if not directive:
+            match = re.match(r"(require|replace|use)\s+(.+)", line)
+            if match is None:
+                continue
+            directive = match.group(1)
+            line = match.group(2)
+        if directive == "require":
+            parts = line.split()
+            if len(parts) == 2 and parts[1].startswith("v"):
+                requirements.append((parts[0], parts[1]))
+        elif directive == "replace" and "=>" in line:
+            before, after = (part.strip().split() for part in line.split("=>", 1))
+            if len(before) in {1, 2} and len(after) in {1, 2}:
+                replacements.append((before[0], before[1] if len(before) == 2 else "",
+                                     after[0], after[1] if len(after) == 2 else ""))
+        elif directive == "use":
+            parts = line.split()
+            if len(parts) == 1:
+                uses.append(parts[0])
+    return requirements, replacements, uses
+
+
+def declared_go_dependency_records(
+    project: Path, rel_names: dict[str, Path],
+) -> list[dict[str, str]]:
+    """Read Go declarations without mistaking them for a selected build list."""
+    workspace = rel_names.get("go.work")
+    workspace_replacements: list[tuple[str, str, str, str]] = []
+    module_paths: list[Path] = []
+    unresolved_uses: list[str] = []
+
+    def inside_project(path: Path) -> bool:
+        try:
+            return path.resolve(strict=True).is_relative_to(project.resolve(strict=True))
+        except OSError:
+            return False
+
+    if workspace:
+        if inside_project(workspace):
+            _requirements, workspace_replacements, uses = go_directives(workspace)
+        else:
+            _requirements, workspace_replacements, uses = [], [], []
+            unresolved_uses.append("go.work")
+        for use in uses:
+            candidate = Path(os.path.normpath(str(Path(use) / "go.mod")))
+            if candidate.is_absolute() or ".." in candidate.parts:
+                unresolved_uses.append(use)
+                continue
+            path = rel_names.get(candidate.as_posix())
+            if path and inside_project(path):
+                module_paths.append(path)
+            else:
+                unresolved_uses.append(use)
+    elif rel_names.get("go.mod"):
+        if inside_project(rel_names["go.mod"]):
+            module_paths.append(rel_names["go.mod"])
+        else:
+            unresolved_uses.append("go.mod")
+
+    records: list[dict[str, str]] = []
+    seen: set[tuple[str, str, str]] = set()
+    if unresolved_uses:
+        records.append({"name": "Go workspace module (unresolved)", "version": "",
+                        "source": "go-workspace-unresolved", "ecosystem": "go"})
+    for path in module_paths:
+        requirements, module_replacements, _uses = go_directives(path)
+        for name, version in requirements:
+            key = name.casefold()
+            workspace_matches = [item for item in workspace_replacements if item[0].casefold() == key]
+            module_matches = [item for item in module_replacements if item[0].casefold() == key]
+            workspace_versions = {item[1] for item in workspace_matches}
+            replacements = workspace_matches + [
+                item for item in module_matches
+                if "" not in workspace_versions and item[1] not in workspace_versions
+            ]
+            if not replacements:
+                candidates = [(name, version, "go-minimum")]
+            else:
+                # The selected build-list version is unknown, so every possible
+                # replacement remains a candidate rather than an asserted match.
+                candidates = [(name, "", "go-replaced")]
+                candidates.extend((target, target_version, "go-replacement-candidate")
+                                  for _old, _version, target, target_version in replacements
+                                  if target_version and target.casefold() != key)
+            for candidate_name, candidate_version, source in candidates:
+                identity = (candidate_name.casefold(), candidate_version.casefold(), source)
+                if identity not in seen:
+                    records.append({"name": candidate_name, "version": candidate_version,
+                                    "source": source, "ecosystem": "go"})
+                    seen.add(identity)
+    return records
+
+
+def dependency_map(
+    project: Path, files: list[Path],
+) -> tuple[
+    dict[str, str], list[str], dict[str, str], dict[str, str], dict[str, str],
+    list[dict[str, str]],
+]:
     deps: dict[str, str] = {}
+    dependency_sources: dict[str, str] = {}
     frameworks: set[str] = set()
     declared_runtimes: dict[str, str] = {}
+    runtime_sources: dict[str, str] = {}
     rel_names = {str(p.relative_to(project)): p for p in files}
 
     for rel in ("composer.json", "package.json"):
@@ -291,16 +590,27 @@ def dependency_map(project: Path, files: list[Path]) -> tuple[dict[str, str], li
             if isinstance(values, dict):
                 for name, version in values.items():
                     deps[str(name)] = str(version)
+                    dependency_sources[str(name)] = "declared"
         if rel == "composer.json":
             php = data.get("config", {}).get("platform", {}).get("php") if isinstance(data.get("config"), dict) else None
             php = php or (data.get("require", {}).get("php") if isinstance(data.get("require"), dict) else None)
             if php:
                 declared_runtimes["PHP"] = str(php)
+                runtime_sources["PHP"] = "declared"
         else:
             engines = data.get("engines", {})
             if isinstance(engines, dict):
                 for name, version in engines.items():
                     declared_runtimes[str(name)] = str(version)
+                    runtime_sources[str(name)] = "declared"
+
+    resolved_records = resolved_dependency_records(project, rel_names)
+    dependency_records = list(resolved_records)
+    if rel_names.get("go.mod") or rel_names.get("go.work"):
+        dependency_records.extend(declared_go_dependency_records(project, rel_names))
+    for package in dependency_records:
+        deps[package["name"]] = package["version"]
+        dependency_sources[package["name"]] = package["source"]
 
     pyproject = rel_names.get("pyproject.toml")
     if pyproject:
@@ -309,10 +619,12 @@ def dependency_map(project: Path, files: list[Path]) -> tuple[dict[str, str], li
             project_data = data.get("project", {})
             if project_data.get("requires-python"):
                 declared_runtimes["Python"] = str(project_data["requires-python"])
+                runtime_sources["Python"] = "declared"
             for item in project_data.get("dependencies", []):
                 match = re.match(r"([A-Za-z0-9_.-]+)\s*(.*)", str(item))
                 if match:
                     deps[match.group(1)] = match.group(2).strip() or "unconstrained"
+                    dependency_sources[match.group(1)] = "declared"
         except (OSError, UnicodeError, tomllib.TOMLDecodeError):
             pass
 
@@ -326,6 +638,7 @@ def dependency_map(project: Path, files: list[Path]) -> tuple[dict[str, str], li
                 match = re.match(r"([A-Za-z0-9_.-]+)\s*([^;]*)", line)
                 if match:
                     deps[match.group(1)] = match.group(2).strip() or "unconstrained"
+                    dependency_sources[match.group(1)] = "declared"
         except (OSError, UnicodeError):
             pass
 
@@ -333,6 +646,7 @@ def dependency_map(project: Path, files: list[Path]) -> tuple[dict[str, str], li
         if candidate.is_file() and candidate.name not in SECRET_NAMES:
             try:
                 declared_runtimes["Python"] = candidate.read_text(encoding="utf-8").strip()[:80]
+                runtime_sources["Python"] = "declared"
             except (OSError, UnicodeError):
                 pass
     pyvenv = project / "venv" / "pyvenv.cfg"
@@ -341,6 +655,7 @@ def dependency_map(project: Path, files: list[Path]) -> tuple[dict[str, str], li
             match = re.search(r"(?m)^version\s*=\s*(.+)$", pyvenv.read_text(encoding="utf-8"))
             if match:
                 declared_runtimes["Python installed (local venv)"] = match.group(1).strip()
+                runtime_sources["Python installed (local venv)"] = "verified-local"
         except (OSError, UnicodeError):
             pass
 
@@ -348,7 +663,10 @@ def dependency_map(project: Path, files: list[Path]) -> tuple[dict[str, str], li
     for needle, framework in FRAMEWORK_PACKAGES.items():
         if needle in lowered or any(name.startswith(needle) for name in lowered):
             frameworks.add(framework)
-    return dict(sorted(deps.items(), key=lambda item: item[0].lower())), sorted(frameworks), declared_runtimes
+    return (
+        dict(sorted(deps.items(), key=lambda item: item[0].lower())), sorted(frameworks),
+        declared_runtimes, dependency_sources, runtime_sources, dependency_records,
+    )
 
 
 def docker_and_infra(project: Path, files: list[Path]) -> dict[str, list[str]]:
@@ -411,12 +729,13 @@ def docker_and_infra(project: Path, files: list[Path]) -> dict[str, list[str]]:
     }.items():
         if any(n in joined for n in needles):
             web.add(label)
-    return {
+    result = {
         "containers": sorted(containers), "databases": sorted(databases),
         "web_servers_and_proxies": sorted(web), "operating_systems": sorted(os_values),
         "ci_cd": sorted(cicd), "infrastructure_as_code": sorted(iac),
         "virtualization_and_services": sorted(virtualization),
     }
+    return result
 
 
 def analyze_project(
@@ -425,13 +744,26 @@ def analyze_project(
     files, truncated = iter_project_files(project, root, exclude_patterns, limit)
     languages = Counter(EXT_LANG.get(p.suffix.lower()) for p in files)
     languages.pop(None, None)
-    deps, frameworks, runtimes = dependency_map(project, files)
+    (
+        deps, frameworks, runtimes, dependency_sources, runtime_sources,
+        dependency_records,
+    ) = dependency_map(project, files)
+    framework_aliases: dict[str, str] = {}
+    lowered_dependencies = {name.casefold(): name for name in deps}
+    for package, framework in FRAMEWORK_PACKAGES.items():
+        match = next(
+            (original for lowered, original in lowered_dependencies.items()
+             if lowered == package or lowered.startswith(package)),
+            None,
+        )
+        if match:
+            framework_aliases[framework] = match
     manifests = sorted(str(p.relative_to(project)) for p in files if p.name in MANIFEST_NAMES)
     agents = sorted(str(p.relative_to(project)) for p in files if p.name == "AGENTS.md")
     infra = docker_and_infra(project, files)
     frontend = any(x in languages for x in ("JavaScript", "JavaScript/JSX", "TypeScript", "TypeScript/TSX", "CSS", "SCSS"))
     backend = any(x in languages for x in ("PHP", "Python", "Java", "Ruby", "Go", "C#"))
-    return {
+    result = {
         "id": re.sub(r"[^a-z0-9]+", "-", project.name.lower()).strip("-") or "project",
         "path": str(project),
         "git_repository": (project / ".git").exists(),
@@ -440,26 +772,28 @@ def analyze_project(
         "languages": [{"name": name, "files": count} for name, count in languages.most_common()],
         "declared_or_local_runtime_versions": dict(sorted(runtimes.items())),
         "frameworks_and_tooling": frameworks,
+        "framework_package_aliases": framework_aliases,
         "manifests_and_lockfiles": manifests,
         "dependencies": deps,
+        "dependency_version_records": dependency_records,
+        "dependency_version_sources": dependency_sources,
+        "runtime_version_sources": runtime_sources,
         **infra,
         "scan": {"files_examined": len(files), "truncated": truncated, "read_only": True},
     }
+    result["technology_inventory"] = project_technology_records(result)
+    return result
 
 
 def build_inventory(config: dict[str, Any]) -> list[dict[str, Any]]:
     limit = int(config.get("inventory", {}).get("max_files_per_project", 20000))
     previous_preferences: dict[str, dict[str, Any]] = {}
-    previous_manual: dict[str, list[dict[str, str]]] = {}
     for previous in config.get("inventory", {}).get("projects", []):
         if not isinstance(previous, dict) or not previous.get("path"):
             continue
         settings = previous.get("advisory_checks", {})
         if isinstance(settings, dict):
             previous_preferences[str(previous["path"])] = settings
-        previous_manual[str(previous["path"])] = normalize_manual_technologies(
-            previous.get("manual_technologies", []),
-        )
     projects: dict[Path, tuple[Path, tuple[str, ...]]] = {}
     for item in config.get("project_roots", []):
         if not isinstance(item, dict) or not item.get("enabled", True):
@@ -480,7 +814,9 @@ def build_inventory(config: dict[str, Any]) -> list[dict[str, Any]]:
             "enabled": bool(previous.get("enabled", True)),
             "preferred_ai": preferred_ai if preferred_ai in {"codex", "claude"} else None,
         }
-        result["manual_technologies"] = previous_manual.get(str(project), [])
+        # A deliberate refresh replaces technology and version edits. Project
+        # inclusion and AI routing remain user preferences and are preserved.
+        result["manual_technologies"] = []
         inventory.append(result)
     return inventory
 
