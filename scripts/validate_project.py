@@ -26,9 +26,17 @@ try:
 except ImportError:
     from scripts.configuration import effective_config_path
 try:
+    from release_cache import load_cache, ReleaseCacheError, SHARED_CACHE
+except ImportError:
+    from scripts.release_cache import load_cache, ReleaseCacheError, SHARED_CACHE
+try:
     from inventory import normalize_manual_technologies
 except ImportError:
     from scripts.inventory import normalize_manual_technologies
+try:
+    from technology_state import ambiguous_manual_dependencies
+except ImportError:
+    from scripts.technology_state import ambiguous_manual_dependencies
 
 
 SOURCE_TYPES = {"html", "rss", "atom", "json", "api", "repository"}
@@ -92,6 +100,10 @@ def main() -> int:
     root = Path(__file__).resolve().parent.parent
     config_dir = (root / args.config_dir).resolve() if not Path(args.config_dir).is_absolute() else Path(args.config_dir)
     errors: list[str] = []
+    try:
+        load_cache(Path(__file__).resolve().parent.parent / SHARED_CACHE, missing_ok=False)
+    except ReleaseCacheError as error:
+        fail(str(error), errors)
     projects_config = load_config_file(
         effective_config_path(config_dir, "projects.example.yaml"), errors,
     )
@@ -101,6 +113,21 @@ def main() -> int:
     reports_config = load_config_file(
         effective_config_path(config_dir, "reports.yaml"), errors,
     )
+    overlap_days = (reports_config.get("reports", {}) or {}).get(
+        "incremental_overlap_days", 10,
+    )
+    if not isinstance(overlap_days, int) or isinstance(overlap_days, bool) or not 1 <= overlap_days <= 90:
+        fail("reports.incremental_overlap_days must be an integer from 1 to 90", errors)
+    release_metadata = (reports_config.get("reports", {}) or {}).get("release_metadata", {})
+    if not isinstance(release_metadata, dict):
+        fail("reports.release_metadata must be a mapping", errors)
+    else:
+        online_enabled = release_metadata.get("online_enabled", True)
+        negative_ttl = release_metadata.get("negative_ttl_days", 30)
+        if not isinstance(online_enabled, bool):
+            fail("reports.release_metadata.online_enabled must be a boolean", errors)
+        if not isinstance(negative_ttl, int) or isinstance(negative_ttl, bool) or not 1 <= negative_ttl <= 365:
+            fail("reports.release_metadata.negative_ttl_days must be an integer from 1 to 365", errors)
     agents_config = load_config_file(
         effective_config_path(config_dir, "ai-agents.yaml"), errors,
     )
@@ -146,7 +173,11 @@ def main() -> int:
             fail(f"inventory project {index}: must be a mapping", errors)
             continue
         try:
-            normalize_manual_technologies(project.get("manual_technologies", []))
+            manual = normalize_manual_technologies(project.get("manual_technologies", []))
+            ambiguous = ambiguous_manual_dependencies(project, manual)
+            if ambiguous:
+                fail(f"inventory project {index}: manual dependencies need an ecosystem: "
+                     + ", ".join(ambiguous), errors)
         except ValueError as error:
             fail(f"inventory project {index}: {error}", errors)
         advisory_checks = project.get("advisory_checks", {})

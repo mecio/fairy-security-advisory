@@ -21,7 +21,11 @@ Run a repeatable, evidence-based, read-only check against inventoried projects. 
    `config/projects.example.yaml` as documented
    in the README; never invent local paths.
 2. Before analyzing a project, read its `AGENTS.md` and referenced directives relevant to version, dependency, and infrastructure scanning.
-3. Validate configuration with `python3 scripts/validate_project.py --config-dir config`. If `inventory.projects` in `config/local/projects.yaml` is empty or older than `refresh_after_hours`, run `python3 scripts/inventory.py --config-dir config`.
+3. Validate configuration with `python3 scripts/validate_project.py --config-dir config`.
+   If `inventory.projects` in `config/local/projects.yaml` is empty or older
+   than `refresh_after_hours`, report that condition. Never refresh it as a
+   side effect of an advisory check: inventory discovery and technology/version
+   replacement run only after an explicit user action and confirmation.
 4. Build the analysis scope from inventory projects whose
    `advisory_checks.enabled` value is not `false`. Keep disabled projects in the
    inventory, but do not inspect their manifests or lockfiles, run OSV-Scanner
@@ -52,6 +56,18 @@ Run a repeatable, evidence-based, read-only check against inventoried projects. 
    Other-provider phases are read-only and return a dossier. Only the
    coordinator may merge dossiers, deduplicate findings, and update canonical
    reports. Stop without updating reports if a required evidence phase fails.
+   When the plan contains `technology_scope`, `baseline_scan`,
+   `baseline_windows`, `run_kind`, and `source_windows`, treat them as
+   authoritative. Historical initialization is limited to selected baseline
+   combinations and starts at each exact version's official release date;
+   package dependencies use their exact version, while runtimes, databases,
+   operating systems, and similar platforms start at the applicable release
+   line recorded in `baseline_version`;
+   `source_windows` independently bound the incremental portion of a hybrid
+   run. Ordinary applicability analysis
+   is limited to current inventoried versions. Ignore advisories whose affected
+   ranges cannot include the current version. Unknown versions require a
+   generic low-confidence scan and an explicit human-review limitation.
 4. Open every candidate advisory and collect its identifier/CVE, affected and fixed versions, prerequisites, vector, mitigations, and date. Confirm through primary sources in this order: vendor, official project, CVE record. Treat aggregators as signals, not sole evidence.
 5. Check manifests and lockfiles and, when possible without mutation, installed versions. Always distinguish presence, declared version, verified installed version, and production. Never infer production from local development.
    Treat `manual_technologies` in the local inventory as user-declared scope
@@ -79,6 +95,17 @@ Read [references/report-format.md](references/report-format.md) before writing. 
    year/month archive only after the active follow-up has been updated.
 
 Repeat all unfinished activities in the daily report. Do not mark a vulnerability resolved merely because a mitigation exists. Always list unperformed checks, residual risk, confidence, and changes made.
+Label initialization sections `Initialization baseline`; keep them in the same
+daily report format used by incremental checks. Report fixed versions as
+recommendations only and never write them back to inventory.
+For every selected baseline key, include the exact machine-readable marker
+required by the routed plan. Write the routed run's `evidence-state.json`
+receipt with one status for every selected baseline and every active source.
+Never mark a source complete from reachability alone; partial or failed source
+coverage must not advance its checkpoint.
+For every completed baseline receipt, record `baseline_version`, `release_date`,
+`release_source_url`, `searched_since`, and `searched_until`. Use `partial` when the official release date or complete
+historical interval cannot be verified.
 
 ## Constraints
 

@@ -18,6 +18,19 @@ Use these sections, adapting them without removing historical evidence:
 8. `Limitations and residual risk`: unverified production, missing sources/tools, and declared-versus-installed version gaps.
 9. `Changes made`: normally reports, summary, follow-up, and local inventory only.
 
+For an initialization or hybrid run, title the historical subsection
+`Initialization baseline` and list every selected canonical technology/version combination,
+including partial generic scans for missing versions. For incremental runs,
+record the per-source covered interval and configured overlap. Never present an
+inventory quality color as a security risk rating.
+Each selected initialization entry must include the exact line
+``- Technology key: `<key>` — ...`` so deterministic validation can reject an
+incomplete baseline report.
+The corresponding machine receipt marks a baseline `completed` only when it
+includes `baseline_version`, the official `release_date`, an HTTPS
+`release_source_url`, and an actual `searched_since` through `searched_until`
+interval covering that release through the run date.
+
 Cite sources close to supported claims. Do not copy long passages.
 Give each finding and follow-up activity a concise, searchable `Issue title`
 that names the affected component and the security problem. Include a

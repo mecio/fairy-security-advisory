@@ -8,8 +8,9 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from scripts.manage import (
-    ANALYSIS_PROGRESS_PREFIX, ai_command, analysis_prompt, consolidation_prompt,
-    emit_analysis_progress,
+    ANALYSIS_PROGRESS_PREFIX, ROOT, ai_command, analysis_prompt, consolidation_prompt,
+    consume_technology_selection, coverage_completion_status, emit_analysis_progress,
+    prepare_analysis_service, refresh_inventory,
     render_cli_banner, run_ai_check,
     scoped_evidence_prompt, source_request, validate_canonical_report_updates,
 )
@@ -17,6 +18,73 @@ from scripts.sandbox_preflight import claude_sandbox_settings
 
 
 class AdvisorySourceRequestTest(unittest.TestCase):
+    def test_coverage_status_distinguishes_limitations_and_total_failure(self) -> None:
+        self.assertEqual(
+            coverage_completion_status({"one": "completed"}, ["one"], 2, 2),
+            "completed",
+        )
+        self.assertEqual(
+            coverage_completion_status({"one": "partial"}, ["one"], 2, 2),
+            "completed-with-limitations",
+        )
+        self.assertEqual(
+            coverage_completion_status({"one": "completed"}, ["one"], 1, 2),
+            "completed-with-limitations",
+        )
+        self.assertEqual(
+            coverage_completion_status({"one": "failed", "two": "failed"}, ["one", "two"], 2, 2),
+            "failed",
+        )
+
+    def test_private_technology_selection_is_consumed_once(self) -> None:
+        with TemporaryDirectory() as directory, patch("scripts.manage.ROOT", Path(directory)):
+            request = Path(directory) / "output/analysis-requests/selection.json"
+            request.parent.mkdir(parents=True)
+            request.write_text(
+                '{"schema_version":1,"technology_keys":["php-1234567890abcdef"]}',
+                encoding="utf-8",
+            )
+            keys = consume_technology_selection(str(request))
+            self.assertFalse(request.exists())
+        self.assertEqual(keys, ["php-1234567890abcdef"])
+
+    def test_private_technology_selection_rejects_symlinked_request_directory(self) -> None:
+        with TemporaryDirectory() as directory, patch("scripts.manage.ROOT", Path(directory)):
+            output = Path(directory) / "output"
+            outside = Path(directory) / "outside"
+            output.mkdir()
+            outside.mkdir()
+            request = outside / "selection.json"
+            request.write_text(
+                '{"schema_version":1,"technology_keys":[]}', encoding="utf-8",
+            )
+            (output / "analysis-requests").symlink_to(outside, target_is_directory=True)
+            with self.assertRaisesRegex(ValueError, "directory is unsafe"):
+                consume_technology_selection(str(output / "analysis-requests/selection.json"))
+            self.assertTrue(request.exists())
+
+    def test_stale_inventory_is_never_refreshed_implicitly_before_analysis(self) -> None:
+        with patch("scripts.manage.effective_config_path", return_value=Path("config/local/projects.yaml")), patch(
+            "scripts.manage.safe_load_yaml", return_value={"project_roots": [{"path": "/tmp"}]},
+        ), patch("scripts.manage.configured_roots_ready", return_value=True), patch(
+            "scripts.manage.inventory_is_current", return_value=(False, "200 hours old"),
+        ), patch("scripts.manage.refresh_inventory") as refresh, patch(
+            "scripts.manage.validate_configuration", return_value=0,
+        ), patch("scripts.manage.check_prerequisites", return_value=0), patch(
+            "scripts.manage.check_sources", return_value=0,
+        ):
+            self.assertTrue(prepare_analysis_service("codex", assume_yes=True))
+        refresh.assert_not_called()
+
+    def test_explicit_inventory_refresh_creates_backup_before_scanning(self) -> None:
+        backup = {"archive": ROOT / "output/config-backups/safety.zip"}
+        with patch("scripts.manage.effective_config_path", return_value=Path("config/local/projects.yaml")), patch(
+            "scripts.manage.create_configuration_backup", return_value=backup,
+        ) as create_backup, patch("scripts.manage.run_command", return_value=0) as run:
+            self.assertEqual(refresh_inventory(assume_yes=True), 0)
+        create_backup.assert_called_once()
+        run.assert_called_once()
+
     def test_canonical_output_validation_rejects_unchanged_reports(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
@@ -76,6 +144,36 @@ class AdvisorySourceRequestTest(unittest.TestCase):
                 paths, {name: None for name in paths},
                 expected_project_ids=["api", "worker"],
                 prior_daily_text=prior,
+            )
+            self.assertTrue(valid)
+
+    def test_canonical_output_validation_requires_every_selected_baseline_key(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            paths = {
+                "daily report": root / "daily.md", "summary": root / "summary.md",
+                "follow-up": root / "followup.md",
+            }
+            paths["daily report"].write_text(
+                "## Projects and technologies involved\n- Project: `api` — checked.\n",
+                encoding="utf-8",
+            )
+            paths["summary"].write_text("updated", encoding="utf-8")
+            paths["follow-up"].write_text("existing", encoding="utf-8")
+            valid, detail = validate_canonical_report_updates(
+                paths, {name: None for name in paths}, expected_project_ids=["api"],
+                expected_technology_keys=["php-1234567890abcdef"],
+            )
+            self.assertFalse(valid)
+            self.assertIn("missing technology baseline coverage", detail)
+            paths["daily report"].write_text(
+                paths["daily report"].read_text(encoding="utf-8")
+                + "- Technology key: `php-1234567890abcdef` — completed.\n",
+                encoding="utf-8",
+            )
+            valid, _detail = validate_canonical_report_updates(
+                paths, {name: None for name in paths}, expected_project_ids=["api"],
+                expected_technology_keys=["php-1234567890abcdef"],
             )
             self.assertTrue(valid)
 
@@ -251,6 +349,10 @@ class AdvisorySourceRequestTest(unittest.TestCase):
                         if name == "daily report" else f"# Updated {name}\n"
                     )
                     path.write_text(content, encoding="utf-8")
+                (capture.parent / "evidence-state.json").write_text(
+                    '{"schema_version":1,"baselines":[],"sources":[]}',
+                    encoding="utf-8",
+                )
             return 0
 
         with TemporaryDirectory() as directory:

@@ -14,6 +14,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import time
@@ -80,6 +81,22 @@ try:
     from sandbox_preflight import claude_sandbox_settings, print_sandbox_preflight
 except ImportError:
     from scripts.sandbox_preflight import claude_sandbox_settings, print_sandbox_preflight
+try:
+    from release_cache import ReleaseCacheError, export_shared_candidates, resolve_release_metadata
+except ImportError:
+    from scripts.release_cache import ReleaseCacheError, export_shared_candidates, resolve_release_metadata
+try:
+    from technology_state import (
+        baseline_windows, collect_technology_scope, incremental_since, load_state_for_run, prune_inactive_baselines,
+        record_completed_baselines, record_source_successes, save_state, scan_rows, StateError,
+        validate_evidence_state,
+    )
+except ImportError:
+    from scripts.technology_state import (
+        baseline_windows, collect_technology_scope, incremental_since, load_state_for_run, prune_inactive_baselines,
+        record_completed_baselines, record_source_successes, save_state, scan_rows, StateError,
+        validate_evidence_state,
+    )
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -509,10 +526,23 @@ def refresh_inventory(*, assume_yes: bool = False) -> int:
     if projects_config == EXAMPLE_CONFIG:
         print("Local configuration is missing. Use menu option 3 first.", file=sys.stderr)
         return 1
-    if not assume_yes and not confirm("Refresh the ignored local inventory now?"):
+    warning = (
+        "Refresh the ignored local inventory now? Detected technologies, versions, and "
+        "manual technology edits will be replaced. Project Check and Preferred AI choices "
+        "will be preserved. A private safety backup will be created first."
+    )
+    if not assume_yes and not confirm(warning):
         print("Cancelled.")
         return 0
-    return run_command([sys.executable, "scripts/inventory.py", "--config-dir", "config"])
+    try:
+        backup = create_configuration_backup(ROOT)
+    except (OSError, BackupError) as error:
+        print(f"Inventory refresh backup failed: {error}", file=sys.stderr)
+        return 1
+    result = run_command([sys.executable, "scripts/inventory.py", "--config-dir", "config"])
+    if result == 0:
+        print(f"Safety backup: {backup['archive'].relative_to(ROOT)}")
+    return result
 
 
 def source_request(source: dict) -> urllib.request.Request:
@@ -663,6 +693,8 @@ def validate_project_license() -> int:
         "scripts/manage.py",
         "scripts/analysis_plan.py",
         "scripts/inventory.py",
+        "scripts/release_cache.py",
+        "scripts/technology_state.py",
         "scripts/validate_project.py",
         "desktop/__init__.py",
         "desktop/__main__.py",
@@ -675,6 +707,8 @@ def validate_project_license() -> int:
         "tests/test_desktop_ui.py",
         "tests/test_analysis_plan.py",
         "tests/test_inventory.py",
+        "tests/test_release_cache.py",
+        "tests/test_technology_state.py",
         "tests/test_manage.py",
         "tests/test_sandbox_preflight.py",
     ):
@@ -836,6 +870,7 @@ def analysis_prompt(provider: str, execution_mode: str | None = None) -> str:
 
 def scoped_evidence_prompt(
     provider: str, projects: list[dict[str, str]], execution_mode: str | None = None,
+    plan_path: Path | None = None,
 ) -> str:
     scope = json.dumps(projects, ensure_ascii=False, indent=2)
     return (
@@ -849,15 +884,28 @@ def scoped_evidence_prompt(
         "self-contained Markdown dossier containing checked sources, candidate and "
         "excluded advisories, manifest/lockfile evidence, applicability, risk, confidence, "
         "recommended actions, and limitations. Include the project ID with every finding.\n\n"
-        f"{RESET_ARCHIVE_BOUNDARY}\n\n"
+        + (
+            f"Read the authoritative plan at {plan_path}. Apply its technology_scope, "
+            "baseline_windows, and per-source source_windows. For each selected baseline "
+            "with a confirmed exact version, "
+            "resolve the official release date of that exact version first and search from "
+            "that date through baseline_windows[key].until. Apply source_windows separately "
+            "to the incremental portion of the run. A null incremental source window means "
+            "no successful checkpoint exists. Go declarations and replacement candidates "
+            "are version hints, not selected build-list versions; scan them generically and "
+            "mark their baselines partial until a human confirms the effective version.\n\n"
+            if plan_path is not None else ""
+        )
+        + f"{RESET_ARCHIVE_BOUNDARY}\n\n"
         + execution_guidance(execution_mode)
     )
 
 
 def consolidation_prompt(
-    provider: str, plan_path: Path, dossiers: list[Path],
+    provider: str, plan_path: Path, dossiers: list[Path], evidence_state_path: Path | None = None,
     execution_mode: str | None = None,
 ) -> str:
+    evidence_state_path = evidence_state_path or plan_path.with_name("evidence-state.json")
     dossier_lines = "\n".join(f"- {path}" for path in dossiers) or "- none"
     return (
         f"{AI_PROMPTS[provider]}\n\n"
@@ -873,6 +921,35 @@ def consolidation_prompt(
         "Explain each project's evidence, disposition, and limitations; do not "
         "treat a read-only dossier as outside scope merely because another provider "
         "collected it. "
+        "Read technology_scope, baseline_scan, baseline_windows, run_kind, and source_windows "
+        "from the plan. The run may be hybrid: resolve each selected version's official release "
+        "date and cover its complete baseline interval independently when the version is "
+        "confirmed, while applying source_windows "
+        "only to incremental coverage for already initialized technologies. "
+        "Use current technology versions as the applicability filter: do not create findings "
+        "for version ranges that cannot affect an inventoried version. Unknown versions require "
+        "a generic low-confidence scan and explicit human-review limitation. Go declarations "
+        "and replacement candidates are minimums or unverified hints, not selected build-list "
+        "versions: scan generically and mark those baselines partial for human review. "
+        "Perform deterministic "
+        "package/version and affected-range correlation first; use AI judgment only for ambiguous "
+        "identity, prerequisites, reachability, or incomplete evidence. When run_kind is "
+        "initialization or hybrid, label the new historical section 'Initialization baseline'; "
+        "label the ordinary portion as an incremental check. Reports are informational and must not change inventory "
+        "or scanned projects. Technology entries whose baseline_status is missing but whose keys "
+        "are absent from baseline_scan were deliberately deselected; continue the run but report "
+        "their incomplete coverage. "
+        "For every key in baseline_scan, include a line '- Technology key: `<key>` — ...' in the "
+        "Initialization baseline section. Write a machine-readable JSON coverage receipt to the "
+        f"exact path {evidence_state_path} with schema_version 1, a baselines list containing every "
+        "selected key exactly once with status completed, partial, or failed. Every completed "
+        "baseline must also contain baseline_version, ISO-8601 release_date, searched_since, searched_until, "
+        "and an HTTPS release_source_url; "
+        "searched_since must be no later than the release date. Use partial when an official "
+        "release date or full historical coverage cannot be established. Include a sources list "
+        "containing every configured active source ID exactly once with status complete, partial, "
+        "or failed. Mark a source complete only when advisory content coverage, not mere reachability, "
+        "succeeded. "
         f"{RESET_ARCHIVE_BOUNDARY} After a reset, rebuild current reports from "
         "fresh evidence and current files only. Do not infer production status "
         "from source code or a local development runtime. "
@@ -910,6 +987,7 @@ def validate_canonical_report_updates(
     paths: dict[str, Path], before: dict[str, str | None],
     *, expected_project_ids: list[str] | None = None,
     prior_daily_text: str | None = None,
+    expected_technology_keys: list[str] | None = None,
 ) -> tuple[bool, str]:
     """Reject a nominally successful coordinator that did not publish its result."""
     missing = [
@@ -958,6 +1036,16 @@ def validate_canonical_report_updates(
                     missing_projects.append(project_id)
             if missing_projects:
                 problems.append("missing project coverage: " + ", ".join(missing_projects))
+        if expected_technology_keys:
+            missing_keys = [
+                key for key in sorted(set(expected_technology_keys))
+                if not re.search(
+                    rf"(?m)^\s*-\s*Technology key:\s*`{re.escape(key)}`\s*(?:—|[-:]|$)",
+                    current_text,
+                )
+            ]
+            if missing_keys:
+                problems.append("missing technology baseline coverage: " + ", ".join(missing_keys))
     if problems:
         return False, "; ".join(problems)
     followup_state = "updated" if changed.get("follow-up") else "verified unchanged"
@@ -1014,11 +1102,10 @@ def prepare_analysis_service(
         return False
     current, detail = inventory_is_current(config)
     if not current:
-        print(f"Local inventory requires refresh: {detail}")
-        if not assume_yes and not confirm("Refresh it before starting the analysis?"):
-            return False
-        if refresh_inventory(assume_yes=True) != 0:
-            return False
+        print(
+            f"Warning: local inventory is stale ({detail}). It is not refreshed "
+            "automatically; use the explicit inventory refresh action if desired."
+        )
     if validate_configuration() != 0:
         return False
     if check_prerequisites(provider) != 0:
@@ -1027,11 +1114,77 @@ def prepare_analysis_service(
     return check_sources(execution_mode) == 0
 
 
+def consume_technology_selection(path_text: str) -> list[str]:
+    """Read and remove one private GUI selection request."""
+    request_root = ROOT / "output/analysis-requests"
+    if request_root.parent.is_symlink() or request_root.is_symlink():
+        raise ValueError("analysis request directory is unsafe")
+    path = Path(os.path.abspath(path_text))
+    if path.parent != Path(os.path.abspath(request_root)):
+        raise ValueError("technology selection file is outside the private request directory")
+    if path.is_symlink() or not path.is_file():
+        raise ValueError("technology selection file is missing or unsafe")
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as error:
+        raise ValueError(f"technology selection file cannot be opened safely: {error}") from error
+    opened = os.fstat(descriptor)
+    try:
+        if not stat.S_ISREG(opened.st_mode) or opened.st_size > 16 * 1024 * 1024:
+            raise ValueError("technology selection file is not regular or is too large")
+        with os.fdopen(descriptor, "r", encoding="utf-8") as handle:
+            descriptor = -1
+            data = json.load(handle)
+        if not isinstance(data, dict) or data.get("schema_version") != 1:
+            raise ValueError("technology selection file must use schema_version 1")
+        keys = data.get("technology_keys")
+        if not isinstance(keys, list) or any(
+            not isinstance(key, str) or not re.fullmatch(r"[a-z0-9-]{3,100}", key)
+            for key in keys
+        ):
+            raise ValueError("technology selection file contains invalid keys")
+        return list(dict.fromkeys(keys))
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+        try:
+            current = os.lstat(path)
+        except FileNotFoundError:
+            current = None
+        if current is not None and (current.st_dev, current.st_ino) == (opened.st_dev, opened.st_ino):
+            path.unlink(missing_ok=True)
+
+
+def coverage_completion_status(
+    baseline_results: dict[str, str], baseline_keys: list[str],
+    successful_source_count: int, expected_source_count: int,
+) -> str:
+    """Map structured coverage to the user-visible run outcome."""
+    if baseline_keys and all(baseline_results.get(key) == "failed" for key in baseline_keys):
+        return "failed"
+    if (
+        any(status != "completed" for status in baseline_results.values())
+        or successful_source_count < expected_source_count
+    ):
+        return "completed-with-limitations"
+    return "completed"
+
+
 def run_ai_check(
     provider: str | None = None, profile: str | None = None,
     execution_mode: str | None = None, *, assume_yes: bool = False,
-    non_interactive: bool = False,
+    non_interactive: bool = False, technology_keys: list[str] | None = None,
+    technology_selection_explicit: bool = False,
+    technology_selection_file: str | None = None,
 ) -> int:
+    if technology_selection_file:
+        try:
+            technology_keys = consume_technology_selection(technology_selection_file)
+        except (OSError, ValueError, json.JSONDecodeError) as error:
+            print(f"Unable to load technology selection: {error}", file=sys.stderr)
+            return 1
+        technology_selection_explicit = True
     interactive_selection = provider is None
     if provider is None:
         print("Select the AI provider:")
@@ -1059,8 +1212,11 @@ def run_ai_check(
         print("Analysis was not started because one or more prerequisites failed.")
         return 1
     try:
+        effective_projects = safe_load_yaml(
+            effective_config_path(CONFIG_DIR, "projects.example.yaml")
+        )
         plan = build_analysis_plan(
-            safe_load_yaml(effective_config_path(CONFIG_DIR, "projects.example.yaml")), provider,
+            effective_projects, provider,
         )
     except AnalysisPlanError as error:
         print(f"Unable to build analysis plan: {error}", file=sys.stderr)
@@ -1068,6 +1224,83 @@ def run_ai_check(
     if not plan["selected_count"]:
         print("No inventory projects are selected for advisory analysis.", file=sys.stderr)
         return 1
+    reports_settings = safe_load_yaml(
+        effective_config_path(CONFIG_DIR, "reports.yaml")
+    ).get("reports", {})
+    daily_directory = ROOT / str(
+        reports_settings.get("daily_directory", "output/daily-advisory-check")
+    )
+    try:
+        state = load_state_for_run(ROOT, daily_directory)
+    except StateError as error:
+        print(
+            f"Advisory state requires human review before analysis: {error}",
+            file=sys.stderr,
+        )
+        return 1
+    technology_scope = collect_technology_scope(effective_projects)
+    rows = scan_rows(effective_projects, state)
+    status_by_key = {row["key"]: row["baseline_status"] for row in rows}
+    for technology in technology_scope:
+        technology["baseline_status"] = status_by_key.get(technology["key"], "missing")
+    available_keys = {item["key"] for item in technology_scope}
+    if technology_selection_explicit:
+        baseline_keys = list(dict.fromkeys(technology_keys or []))
+    else:
+        baseline_keys = [row["key"] for row in rows if row["selected"]]
+    unknown_keys = sorted(set(baseline_keys) - available_keys)
+    if unknown_keys:
+        print("Technology selection is stale; reload Run check and try again.", file=sys.stderr)
+        return 1
+    overlap_days = int(reports_settings.get("incremental_overlap_days", 10))
+    source_config = safe_load_yaml(
+        effective_config_path(CONFIG_DIR, "advisory-sources.yaml")
+    )
+    active_sources = [
+        source for source in source_config.get("advisory_sources", [])
+        if isinstance(source, dict) and source.get("active")
+    ]
+    now = dt.datetime.now(dt.timezone.utc)
+    plan["technology_scope"] = technology_scope
+    plan["baseline_scan"] = baseline_keys
+    prior_baselines = state.get("baselines", {})
+    has_prior_baselines = isinstance(prior_baselines, dict) and bool(prior_baselines)
+    plan["run_kind"] = (
+        "initialization" if baseline_keys and not has_prior_baselines
+        else "hybrid" if baseline_keys else "incremental"
+    )
+    plan["incremental_overlap_days"] = overlap_days
+    release_settings = reports_settings.get("release_metadata", {})
+    if not isinstance(release_settings, dict):
+        release_settings = {}
+    selected_scope = [item for item in technology_scope if item["key"] in set(baseline_keys)]
+    try:
+        release_metadata = resolve_release_metadata(
+            ROOT, selected_scope,
+            online_enabled=bool(release_settings.get("online_enabled", True)),
+            negative_ttl_days=int(release_settings.get("negative_ttl_days", 30)),
+            now=now,
+        )
+    except (OSError, ReleaseCacheError, ValueError) as error:
+        print(f"Release metadata cache requires human review: {error}", file=sys.stderr)
+        return 1
+    plan["baseline_windows"] = baseline_windows(
+        technology_scope, baseline_keys, now, release_metadata,
+    )
+    plan["source_windows"] = {
+        str(source.get("id")): {
+            "since": incremental_since(state, str(source.get("id")), overlap_days, now),
+            "mode": "incremental",
+        }
+        for source in active_sources if source.get("id")
+    }
+    by_project: dict[str, list[str]] = {}
+    for technology in technology_scope:
+        for project_id in technology["projects"]:
+            by_project.setdefault(project_id, []).append(technology["key"])
+    for projects in plan["groups"].values():
+        for project in projects:
+            project["technology_keys"] = sorted(by_project.get(project["id"], []))
     required = required_providers(plan)
     for required_provider in required:
         if required_provider == provider:
@@ -1097,6 +1330,7 @@ def run_ai_check(
     summary_path = run_directory / "run-summary.txt"
     log_path = run_directory / "run.log"
     coordinator_output = run_directory / "coordinator-output.md"
+    evidence_state_path = run_directory / "evidence-state.json"
     started_monotonic = time.monotonic()
     phase_results: list[str] = []
     plan["profile"] = profile_name
@@ -1148,6 +1382,7 @@ def run_ai_check(
             f"Plan: {plan_path.name}",
             f"Event log: {log_path.name}",
             f"Coordinator output: {coordinator_output.name if coordinator_output.is_file() else 'not produced'}",
+            f"Evidence state: {evidence_state_path.name if evidence_state_path.is_file() else 'not produced'}",
         ))
         write_private_text(summary_path, "\n".join(lines))
         return exit_code
@@ -1160,7 +1395,7 @@ def run_ai_check(
         dossier = run_directory / f"{worker}-evidence.md"
         command = ai_command(
             worker, profile_name, mode_name, non_interactive=True,
-            prompt=scoped_evidence_prompt(worker, projects, mode_name), read_only=True,
+            prompt=scoped_evidence_prompt(worker, projects, mode_name, plan_path), read_only=True,
         )
         if command is None:
             print(f"{worker} CLI is unavailable after prerequisite checks.", file=sys.stderr)
@@ -1228,7 +1463,9 @@ def run_ai_check(
     )
     command = ai_command(
         provider, profile_name, mode_name, non_interactive=True,
-        prompt=consolidation_prompt(provider, plan_path, dossiers, mode_name),
+        prompt=consolidation_prompt(
+            provider, plan_path, dossiers, evidence_state_path, mode_name,
+        ),
     )
     if command is None:
         print(f"{provider} CLI is unavailable after prerequisite checks.", file=sys.stderr)
@@ -1262,6 +1499,9 @@ def run_ai_check(
     )
     reports_valid = False
     report_validation = "coordinator command failed"
+    baseline_results: dict[str, str] = {}
+    successful_sources: list[str] = []
+    completion_status = "completed"
     if result == 0:
         reports_valid, report_validation = validate_canonical_report_updates(
             canonical_paths, canonical_before,
@@ -1269,7 +1509,18 @@ def run_ai_check(
                 item["id"] for projects in plan["groups"].values() for item in projects
             ],
             prior_daily_text=prior_daily_text,
+            expected_technology_keys=baseline_keys,
         )
+        if reports_valid:
+            try:
+                baseline_results, successful_sources = validate_evidence_state(
+                    evidence_state_path, baseline_keys,
+                    [str(source["id"]) for source in active_sources],
+                    plan["baseline_windows"],
+                )
+            except ValueError as error:
+                reports_valid = False
+                report_validation = str(error)
         if not reports_valid:
             result = 2
             print(
@@ -1283,12 +1534,20 @@ def run_ai_check(
                 f"OUTPUT_VALIDATION status=failed detail={report_validation}",
             )
         else:
+            coverage_status = coverage_completion_status(
+                baseline_results, baseline_keys, len(successful_sources), len(active_sources),
+            )
+            if coverage_status == "failed":
+                result = 4
+                report_validation += "; every selected baseline failed"
+            else:
+                completion_status = coverage_status
             append_private_line(
                 log_path,
                 f"{dt.datetime.now(dt.timezone.utc).isoformat().replace('+00:00', 'Z')} "
                 f"OUTPUT_VALIDATION status=completed detail={report_validation}",
             )
-    phase_status = "completed" if result == 0 else "failed"
+    phase_status = completion_status if result == 0 else "failed"
     phase_results.append(f"{provider} consolidation — {phase_status} (exit {result})")
     append_private_line(
         log_path,
@@ -1298,13 +1557,41 @@ def run_ai_check(
     )
     emit_analysis_progress(
         phase="complete" if result == 0 else "consolidation",
-        status="completed" if result == 0 else "failed", provider=provider,
+        status=completion_status if result == 0 else "failed", provider=provider,
         completed=plan["selected_count"] if result == 0 else completed_projects,
         total=plan["selected_count"],
         active_projects=0 if result == 0 else len(plan["groups"][provider]),
-        message="Analysis completed" if result == 0 else "Consolidation failed",
+        message=(
+            "Analysis completed with limitations"
+            if result == 0 and completion_status == "completed-with-limitations"
+            else "Analysis completed" if result == 0 else "Consolidation failed"
+        ),
     )
-    return finish_run("completed" if result == 0 else "failed", result)
+    if result == 0:
+        finished = dt.datetime.now(dt.timezone.utc)
+        prune_inactive_baselines(state, available_keys)
+        record_completed_baselines(state, technology_scope, baseline_results, finished)
+        record_source_successes(state, successful_sources, finished)
+        try:
+            save_state(ROOT, state)
+        except OSError as error:
+            phase_results.append(f"advisory state — failed ({error})")
+            append_private_line(
+                log_path,
+                f"{dt.datetime.now(dt.timezone.utc).isoformat().replace('+00:00', 'Z')} "
+                f"STATE_UPDATE status=failed detail={error}",
+            )
+            emit_analysis_progress(
+                phase="complete", status="failed", provider=provider,
+                completed=plan["selected_count"], total=plan["selected_count"],
+                message="Reports updated but advisory state could not be saved",
+            )
+            return finish_run("failed", 3)
+        print(
+            f"Advisory state updated: {len(baseline_keys)} baseline(s), "
+            f"{len(successful_sources)} source checkpoint(s)."
+        )
+    return finish_run(completion_status if result == 0 else "failed", result)
 
 
 def launch_desktop() -> int:
@@ -1319,6 +1606,17 @@ def launch_desktop() -> int:
         )
         return 1
     return run()
+
+
+def export_release_cache() -> int:
+    try:
+        path = export_shared_candidates(ROOT)
+    except (OSError, ReleaseCacheError) as error:
+        print(f"Unable to export shared cache candidates: {error}", file=sys.stderr)
+        return 1
+    print(f"Reviewable shared-cache candidates: {path.relative_to(ROOT)}")
+    print("No versioned cache file, commit, or remote resource was changed.")
+    return 0
 
 
 def install_desktop_launcher(*, assume_yes: bool = False) -> int:
@@ -1376,6 +1674,7 @@ MENU: list[tuple[str, str, Callable[[], int]]] = [
     ("16", "Restore one configuration section to factory defaults", restore_factory_defaults),
     ("17", "Install the Linux application-menu launcher", install_desktop_launcher),
     ("18", "Remove the Linux application-menu launcher", remove_desktop_launcher),
+    ("19", "Export verified release-cache candidates for review", export_release_cache),
 ]
 
 
@@ -1404,7 +1703,7 @@ def main() -> int:
         "import-backup",
         "archive-followups",
         "restore-defaults",
-        "desktop-install", "desktop-remove",
+        "desktop-install", "desktop-remove", "release-cache-export",
     )
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--action", choices=action_names, default="menu")
@@ -1423,6 +1722,18 @@ def main() -> int:
         "--non-interactive", action="store_true",
         help="Use non-interactive agent commands suitable for the desktop interface",
     )
+    parser.add_argument(
+        "--technology-key", action="append",
+        help="Canonical technology key selected for initialization or manual historical rescan",
+    )
+    parser.add_argument(
+        "--technology-selection-explicit", action="store_true",
+        help="Treat an empty technology selection as intentional incremental-only execution",
+    )
+    parser.add_argument(
+        "--technology-selection-file",
+        help="Private JSON selection request created by the desktop interface",
+    )
     args = parser.parse_args()
     actions: dict[str, Callable[[], int]] = {
         "menu": interactive_menu,
@@ -1437,7 +1748,9 @@ def main() -> int:
         "prepublish": prepublication_check,
         "ai-check": lambda: run_ai_check(
             args.provider, args.profile, args.mode, assume_yes=args.yes,
-            non_interactive=args.non_interactive,
+            non_interactive=args.non_interactive, technology_keys=args.technology_key,
+            technology_selection_explicit=args.technology_selection_explicit,
+            technology_selection_file=args.technology_selection_file,
         ),
         "skill-help": show_skill_usage,
         "backup": lambda: backup_configuration(assume_yes=args.yes),
@@ -1446,6 +1759,7 @@ def main() -> int:
         "restore-defaults": lambda: restore_factory_defaults(args.section, assume_yes=args.yes),
         "desktop-install": lambda: install_desktop_launcher(assume_yes=args.yes),
         "desktop-remove": lambda: remove_desktop_launcher(assume_yes=args.yes),
+        "release-cache-export": export_release_cache,
         "gui": launch_desktop,
     }
     return actions[args.action]()
