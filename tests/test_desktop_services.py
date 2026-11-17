@@ -4,6 +4,7 @@
 import os
 import stat
 import datetime as dt
+import json
 from types import SimpleNamespace
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -22,10 +23,32 @@ from desktop.services import (
     write_config_text, update_manual_technologies, technology_names,
     inventory_technology_labels,
     update_inventory_preferences,
+    write_technology_selection,
 )
 
 
 class DesktopConfigurationServicesTest(unittest.TestCase):
+    def test_technology_selection_is_written_as_one_private_request_file(self) -> None:
+        with TemporaryDirectory() as directory, patch(
+            "desktop.services.ANALYSIS_REQUESTS_DIR", Path(directory),
+        ):
+            path = write_technology_selection(["php-1234567890abcdef"])
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            mode = stat.S_IMODE(path.stat().st_mode)
+        self.assertEqual(payload["technology_keys"], ["php-1234567890abcdef"])
+        self.assertEqual(mode, 0o600)
+
+    def test_technology_selection_rejects_symlinked_request_directory(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = root / "outside"
+            target.mkdir()
+            request = root / "analysis-requests"
+            request.symlink_to(target, target_is_directory=True)
+            with patch("desktop.services.ANALYSIS_REQUESTS_DIR", request):
+                with self.assertRaisesRegex(ConfigurationError, "must not be a symlink"):
+                    write_technology_selection(["php-1234567890abcdef"])
+
     def test_manual_technology_is_saved_locally_and_labeled_distinctly(self) -> None:
         with TemporaryDirectory() as directory:
             path = Path(directory) / "projects.yaml"
@@ -41,13 +64,34 @@ class DesktopConfigurationServicesTest(unittest.TestCase):
                     "note": "User-declared use; version unverified",
                 }])
             self.assertIn("PostgreSQL", technology_names(project))
-            self.assertIn("PostgreSQL [manual]", inventory_technology_labels(project))
+            self.assertIn("● PostgreSQL version missing", inventory_technology_labels(project))
             self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
             saved = yaml.safe_load(path.read_text(encoding="utf-8"))
             self.assertEqual(
                 saved["inventory"]["projects"][0]["manual_technologies"][0]["category"],
                 "databases",
             )
+
+    def test_ambiguous_dependency_requires_ecosystem_before_saving(self) -> None:
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "projects.yaml"
+            path.write_text(
+                "schema_version: 1\ninventory:\n  projects:\n    - path: /private/workspace\n"
+                "      technology_inventory:\n"
+                "        - {category: dependencies, name: shared, ecosystem: npm, version: 1.0.0}\n"
+                "        - {category: dependencies, name: shared, ecosystem: pypi, version: 2.0.0}\n",
+                encoding="utf-8",
+            )
+            with patch("desktop.services.effective_config_path", return_value=path):
+                with self.assertRaisesRegex(ConfigurationError, "Select an ecosystem"):
+                    update_manual_technologies("/private/workspace", [{
+                        "name": "shared", "category": "dependencies", "version": "1.1.0",
+                    }])
+                updated = update_manual_technologies("/private/workspace", [{
+                    "name": "shared", "category": "dependencies", "ecosystem": "npm",
+                    "version": "1.1.0",
+                }])
+            self.assertEqual(updated["manual_technologies"][0]["ecosystem"], "npm")
 
     def test_report_reset_archives_current_files_and_preserves_logs(self) -> None:
         with TemporaryDirectory() as directory:
@@ -64,6 +108,8 @@ class DesktopConfigurationServicesTest(unittest.TestCase):
             log = output / "analysis-runs/2026/11/run/run.log"
             log.parent.mkdir(parents=True)
             log.write_text("previous run", encoding="utf-8")
+            state = output / "advisory-state.json"
+            state.write_text('{"schema_version":1}', encoding="utf-8")
             config = {
                 "followup_file": "output/followup.md",
                 "summary_file": "output/check-summary.md",
@@ -75,7 +121,7 @@ class DesktopConfigurationServicesTest(unittest.TestCase):
             ):
                 snapshot, count = archive_and_reset_reports()
 
-            self.assertEqual(count, 4)
+            self.assertEqual(count, 5)
             self.assertTrue(snapshot.is_dir())
             for path in files:
                 self.assertFalse(path.exists())
@@ -84,6 +130,11 @@ class DesktopConfigurationServicesTest(unittest.TestCase):
                     path.name,
                 )
             self.assertEqual(log.read_text(encoding="utf-8"), "previous run")
+            self.assertFalse(state.exists())
+            self.assertEqual(
+                (snapshot / "advisory-state.json").read_text(encoding="utf-8"),
+                '{"schema_version":1}',
+            )
 
     def test_report_reset_rejects_a_file_outside_output(self) -> None:
         with TemporaryDirectory() as directory:

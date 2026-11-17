@@ -106,6 +106,13 @@ directly affect web-server code.
 Per-project `manual_technologies` in local inventory are user-declared scope
 hints, not scanner findings or verified installed and production versions. Use
 them to look for relevant advisories, then verify applicability independently.
+An explicit ecosystem-scoped manual exclusion records a human decision that a
+detected dependency is not used in that project; do not restore it to the active
+scope without new evidence or a user-requested inventory refresh.
+The inventory UI may mark version evidence as red (missing), orange (uncertain,
+constrained, or manually supplied), or green (exact and resolved from a lockfile
+or verified locally). These colors describe inventory
+quality only, never vulnerability or production status.
 
 The detected project inventory is environment-derived data and belongs only in
 the ignored `config/local/projects.yaml`. Never copy local project names,
@@ -137,6 +144,37 @@ applications.
    evidence. Update `output/check-summary.md` with a very short summary of
    completed checks.
 
+When the launcher supplies technology baseline state, use the current
+technology/version combinations as the applicability boundary. A missing
+baseline triggers historical initialization for the selected combinations; a
+known baseline uses each source's last successful checkpoint minus the
+configured overlap. A hybrid run keeps these windows separate: resolve the
+official release date for every selected version and cover its baseline from
+that date through the run. Package dependencies use the exact resolved version;
+platform technologies use the beginning of their applicable release line.
+Check already initialized technologies
+from the incremental source windows. Do not advance a source checkpoint when its content
+coverage is unavailable, partial, or failed. A technology without a version
+receives a generic, explicitly partial baseline and human-review limitation.
+Go `go.mod` requirements are minimum version hints, and `replace` directives
+in `go.mod` or `go.work` may change the code used. Workspace modules outside
+the selected project remain unresolved for human review. Until the effective
+build-list version is confirmed
+and saved by the user, scan these entries generically and keep their baselines
+partial. Do not treat `go.sum` checksums as installed versions.
+Reports are informational and must never change inventory versions.
+Perform deterministic package/version and affected-range matching first. Use AI
+judgment only for ambiguous identity, prerequisites, reachability, or incomplete
+evidence; unresolved cases belong in the report for human review.
+In routed mode, account for every selected baseline and active source in the
+machine-readable evidence receipt requested by the launcher. Reachability alone
+never makes source coverage complete. A completed baseline receipt records its
+official release date and the actual searched interval; if those facts cannot
+be established, mark the baseline partial for human review.
+Prefer verified metadata from the versioned shared release cache, then the
+private local cache, then approved public registry services. Never send private
+package names or local project identifiers to a public metadata service.
+
 ## Minimum report content
 
 - sources and consultation date;
@@ -148,6 +186,11 @@ applications.
 - changes made, normally none during analysis-only work.
 
 ## Operating rules
+
+For desktop screens that combine an inventory table with creation or editing,
+use separate tabs for the table and the form. Open the form with the selected
+row's current values, apply changes to the table preview, and let the user
+review that preview before saving.
 
 - Analysis is read-only unless implementation is explicitly requested.
 - Do not update dependencies, runtimes, servers, or configuration during a check.

@@ -32,6 +32,10 @@ from scripts.config_backup import (
 from scripts.ai_usage import codex_rate_limits, summarize_usage
 from scripts.analysis_plan import build_analysis_plan, plan_summary, required_providers
 from scripts.inventory import normalize_manual_technologies
+from scripts.technology_state import (
+    ambiguous_manual_dependencies, load_state_for_run, project_technology_records,
+    scan_rows, StateError,
+)
 from scripts.desktop_integration import (
     desktop_entry_installed, install_linux_desktop_entry, integration_paths,
     remove_linux_desktop_entry,
@@ -51,6 +55,7 @@ LOCAL_CONFIG = LOCAL_CONFIG_DIR / "projects.yaml"
 LOCAL_APPLICATION_CONFIG = LOCAL_CONFIG_DIR / "application.yaml"
 EXAMPLE_CONFIG = CONFIG_DIR / "projects.example.yaml"
 ANALYSIS_RUNS_DIR = ROOT / "output/analysis-runs"
+ANALYSIS_REQUESTS_DIR = ROOT / "output/analysis-requests"
 CONFIG_FILES: tuple[tuple[str, Path], ...] = tuple(
     (title, LOCAL_CONFIG_DIR / local_name)
     for title, _factory_name, local_name in CONFIG_SPECS
@@ -207,6 +212,47 @@ def inventory_projects() -> list[dict[str, Any]]:
     return [project for project in projects if isinstance(project, dict)]
 
 
+def initialization_scan_rows() -> list[dict[str, Any]]:
+    """Return deduplicated current technologies and their baseline state."""
+    config = load_yaml(effective_config_path(CONFIG_DIR, "projects.example.yaml"))
+    reports = reports_config()
+    daily = ROOT / str(reports.get("daily_directory", "output/daily-advisory-check"))
+    try:
+        state = load_state_for_run(ROOT, daily)
+    except StateError as error:
+        raise ConfigurationError(f"Advisory state requires human review: {error}") from error
+    return scan_rows(config, state)
+
+
+def write_technology_selection(keys: list[str]) -> Path:
+    """Write a private short-lived GUI request instead of expanding the command line."""
+    if any(not isinstance(key, str) or not re.fullmatch(r"[a-z0-9-]{3,100}", key) for key in keys):
+        raise ConfigurationError("Technology selection contains an invalid canonical key.")
+    if ANALYSIS_REQUESTS_DIR.parent.is_symlink():
+        raise ConfigurationError("The output directory for analysis requests must not be a symlink.")
+    if ANALYSIS_REQUESTS_DIR.is_symlink():
+        raise ConfigurationError("The analysis request directory must not be a symlink.")
+    ANALYSIS_REQUESTS_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if not ANALYSIS_REQUESTS_DIR.is_dir() or ANALYSIS_REQUESTS_DIR.is_symlink():
+        raise ConfigurationError("The analysis request path is not a safe directory.")
+    ANALYSIS_REQUESTS_DIR.chmod(0o700)
+    descriptor, name = tempfile.mkstemp(
+        prefix="technology-selection-", suffix=".json", dir=ANALYSIS_REQUESTS_DIR,
+    )
+    path = Path(name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            json.dump({"schema_version": 1, "technology_keys": keys}, handle)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        path.chmod(0o600)
+        return path
+    except Exception:
+        path.unlink(missing_ok=True)
+        raise
+
+
 def update_inventory_preferences(preferences: dict[str, dict[str, Any]]) -> None:
     """Persist per-project advisory selection in the ignored local inventory."""
     config_path = effective_config_path(CONFIG_DIR, "projects.example.yaml")
@@ -254,6 +300,11 @@ def update_manual_technologies(
     if len(matches) != 1:
         raise ConfigurationError("The selected project is no longer unique in local inventory. Reload it.")
     project = matches[0]
+    ambiguous = ambiguous_manual_dependencies(project, manual)
+    if ambiguous:
+        raise ConfigurationError(
+            "Select an ecosystem for ambiguous dependencies: " + ", ".join(ambiguous)
+        )
     project["manual_technologies"] = manual
     write_config_text(config_path, dump_config_data(data), private=True)
     return project
@@ -413,22 +464,13 @@ def technology_names(project: dict[str, Any]) -> list[str]:
 
 
 def inventory_technology_labels(project: dict[str, Any]) -> list[str]:
-    """Show user declarations distinctly from scanner findings in the GUI."""
-    detected = technology_names({**project, "manual_technologies": []})
-    manual = {
-        value["name"].casefold(): value["name"]
-        for value in project.get("manual_technologies", [])
-        if isinstance(value, dict) and isinstance(value.get("name"), str)
-    }
-    detected_keys = {name.casefold() for name in detected}
-    labels = [
-        f"{name} [detected + manual]" if name.casefold() in manual else name
-        for name in detected
-    ]
-    labels.extend(
-        f"{name} [manual]" for key, name in manual.items() if key not in detected_keys
-    )
-    return sorted(labels, key=str.casefold)
+    """Show effective versions and inventory quality without security conclusions."""
+    labels = []
+    symbols = {"green": "●", "orange": "●", "red": "●"}
+    for item in project_technology_records(project):
+        version = item.get("version") or "version missing"
+        labels.append(f"{symbols[item['quality']]} {item['name']} {version}")
+    return labels
 
 
 def reports_config() -> dict[str, Any]:
@@ -485,6 +527,14 @@ def archive_and_reset_reports() -> tuple[Path, int]:
             raise ConfigurationError("A reset snapshot cannot be reset as an active report.")
         if resolved not in seen:
             sources.append((resolved, relative))
+            seen.add(resolved)
+    advisory_state = output_root / "advisory-state.json"
+    if advisory_state.is_symlink():
+        raise ConfigurationError("Refusing to reset a symlinked advisory state file.")
+    if advisory_state.is_file():
+        resolved = advisory_state.resolve()
+        if resolved not in seen:
+            sources.append((resolved, resolved.relative_to(output_root)))
             seen.add(resolved)
     if not sources:
         raise ConfigurationError("There are no local reports or follow-up files to reset.")
@@ -1042,7 +1092,8 @@ def remove_desktop_launcher() -> tuple[Path, Path]:
 def action_command(
     action: str, *, provider: str | None = None, profile: str | None = None,
     mode: str | None = None, assume_yes: bool = False,
-    non_interactive: bool = False,
+    non_interactive: bool = False, technology_keys: list[str] | None = None,
+    technology_selection_file: Path | None = None,
 ) -> list[str]:
     command = [str(ROOT / "fairy-security-advisory"), "--action", action]
     if provider:
@@ -1055,4 +1106,10 @@ def action_command(
         command.append("--yes")
     if non_interactive:
         command.append("--non-interactive")
+    if technology_selection_file is not None:
+        command.extend(("--technology-selection-file", str(technology_selection_file)))
+    elif technology_keys is not None:
+        command.append("--technology-selection-explicit")
+        for key in technology_keys:
+            command.extend(("--technology-key", key))
     return command

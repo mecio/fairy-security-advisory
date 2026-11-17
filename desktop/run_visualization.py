@@ -97,7 +97,7 @@ class RunJourneyWidget(QWidget):
             self.total = 0
         if status == "failed":
             self.finish(False)
-        elif status == "completed" and phase == "complete":
+        elif status in {"completed", "completed-with-limitations"} and phase == "complete":
             self.finish(True)
         else:
             self._update_accessibility()

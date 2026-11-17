@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
 import os
+import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
@@ -10,7 +11,7 @@ from unittest.mock import patch
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 try:
-    from PySide6.QtCore import QUrl
+    from PySide6.QtCore import QProcess, QUrl
     from PySide6.QtCore import Qt
     from PySide6.QtWidgets import QApplication, QComboBox, QLabel, QMessageBox, QPushButton
     from desktop import services
@@ -26,6 +27,7 @@ except ImportError:
     QLabel = None
     QPushButton = None
     QUrl = None
+    QProcess = None
     Qt = None
     EulaDialog = None
     InventoryTechnologiesDialog = None
@@ -34,9 +36,81 @@ except ImportError:
 
 @unittest.skipUnless(QApplication is not None, "optional PySide6 dependency is not installed")
 class DesktopWindowTest(unittest.TestCase):
+    def test_stop_assistant_terminates_active_request_without_saving_partial_reply(self) -> None:
+        application = QApplication.instance() or QApplication([])
+        window = MainWindow()
+        window.show()
+        window.assistant_issue_combo.clear()
+        window.assistant_issue_combo.addItem("Example issue", {
+            "ID": "ISSUE-1", "Project": "Example project",
+        })
+        window.chat_process.setProperty("issue_id", "ISSUE-1")
+        with patch("desktop.main_window.services.assistant_history", return_value=[
+            {"role": "user", "content": "What next?"},
+        ]), patch("desktop.main_window.services.append_assistant_history") as save_reply:
+            window._set_chat_busy("ISSUE-1")
+            window.assistant_send_button.setEnabled(False)
+            window.assistant_stop_button.setEnabled(True)
+            window.chat_process.start(sys.executable, ["-c", "import time; time.sleep(20)"])
+            self.assertTrue(window.chat_process.waitForStarted(3000))
+            window.chat_response = "Partial reply"
+            window.stop_assistant_message()
+            self.assertTrue(window.chat_process.waitForFinished(5000))
+            application.processEvents()
+            self.assertEqual(window.chat_process.state(), QProcess.ProcessState.NotRunning)
+            self.assertFalse(window.chat_busy_timer.isActive())
+            self.assertTrue(window.assistant_busy_progress.isHidden())
+            self.assertFalse(window.assistant_stop_button.isEnabled())
+            self.assertTrue(window.assistant_send_button.isEnabled())
+            self.assertEqual(window.chat_response, "")
+            save_reply.assert_not_called()
+        window.close()
+        window.deleteLater()
+        application.processEvents()
+
+    def test_assistant_shows_progress_and_clears_it_after_start_failure(self) -> None:
+        application = QApplication.instance() or QApplication([])
+        window = MainWindow()
+        window.show()
+        window.assistant_issue_combo.clear()
+        window.assistant_issue_combo.addItem("Example issue", {
+            "ID": "ISSUE-1", "Project": "Example project",
+        })
+        with patch("desktop.main_window.services.assistant_history", return_value=[
+            {"role": "user", "content": "What next?"},
+        ]), patch.object(QMessageBox, "critical"):
+            window._set_chat_busy("ISSUE-1")
+            window.load_assistant_conversation()
+            application.processEvents()
+            self.assertFalse(window.assistant_busy_progress.isHidden())
+            self.assertTrue(window.chat_busy_timer.isActive())
+            self.assertIn("Preparing a response", window.assistant_conversation.toPlainText())
+            window._chat_error(QProcess.ProcessError.FailedToStart)
+            application.processEvents()
+            self.assertTrue(window.assistant_busy_progress.isHidden())
+            self.assertFalse(window.chat_busy_timer.isActive())
+            self.assertNotIn("Preparing a response", window.assistant_conversation.toPlainText())
+            window.chat_start_failed = False
+            window.chat_process.setProperty("issue_id", "ISSUE-1")
+            window._set_chat_busy("ISSUE-1")
+            with patch("desktop.main_window.services.extract_issue_update", return_value=("Done", None)), \
+                 patch("desktop.main_window.services.append_assistant_history"), \
+                 patch.object(window, "_read_chat_output"):
+                window._chat_finished(0, QProcess.ExitStatus.NormalExit)
+            self.assertTrue(window.assistant_busy_progress.isHidden())
+            self.assertFalse(window.chat_busy_timer.isActive())
+        window.close()
+        window.deleteLater()
+        application.processEvents()
+
     def test_inventory_manual_technology_dialog_adds_and_edits_an_entry(self) -> None:
         application = QApplication.instance() or QApplication([])
         dialog = InventoryTechnologiesDialog({"id": "workspace"}, ["Python"])
+        self.assertEqual([dialog.tabs.tabText(index) for index in range(dialog.tabs.count())],
+                         ["Inventory technologies", "Add / edit technology"])
+        self.assertEqual(dialog.tabs.currentIndex(), 0)
+        dialog.add_button.click()
+        self.assertEqual(dialog.tabs.currentIndex(), 1)
         dialog.name.setText("PostgreSQL")
         dialog.category.setCurrentIndex(dialog.category.findData("databases"))
         dialog.note.setText("User-declared database")
@@ -45,11 +119,96 @@ class DesktopWindowTest(unittest.TestCase):
             "name": "PostgreSQL", "category": "databases",
             "note": "User-declared database",
         }])
-        self.assertEqual(dialog.table.currentRow(), -1)
-        dialog.table.setCurrentCell(0, 0)
+        self.assertEqual(dialog.tabs.currentIndex(), 0)
+        dialog.inventory_table.selectRow(0)
+        dialog.edit_button.click()
+        self.assertEqual(dialog.tabs.currentIndex(), 1)
+        self.assertEqual(dialog.name.text(), "PostgreSQL")
         dialog.version.setText("unverified")
         dialog._add_or_update()
         self.assertEqual(dialog.manual[0]["version"], "unverified")
+        dialog.close()
+        dialog.deleteLater()
+        application.processEvents()
+
+    def test_inventory_dialog_can_target_one_dependency_ecosystem(self) -> None:
+        application = QApplication.instance() or QApplication([])
+        project = {"id": "workspace", "technology_inventory": [
+            {"category": "dependencies", "name": "shared", "ecosystem": "npm", "version": "1.0.0"},
+            {"category": "dependencies", "name": "shared", "ecosystem": "pypi", "version": "2.0.0"},
+        ]}
+        dialog = InventoryTechnologiesDialog(project, [])
+        dialog.add_button.click()
+        dialog.name.setText("shared")
+        dialog.category.setCurrentIndex(dialog.category.findData("dependencies"))
+        dialog.ecosystem.setCurrentText("npm")
+        dialog.version.setText("1.1.0")
+        dialog._add_or_update()
+        self.assertEqual(dialog.manual[0]["ecosystem"], "npm")
+        dialog._save()
+        self.assertEqual(dialog.result(), dialog.DialogCode.Accepted)
+        dialog.close()
+        dialog.deleteLater()
+        application.processEvents()
+
+    def test_inventory_dialog_edits_visible_version_without_recreating_other_version(self) -> None:
+        application = QApplication.instance() or QApplication([])
+        project = {"id": "workspace", "technology_inventory": [
+            {"category": "dependencies", "name": "shared", "ecosystem": "npm",
+             "version": "1.0.0", "source": "resolved-lockfile"},
+            {"category": "dependencies", "name": "shared", "ecosystem": "npm",
+             "version": "2.0.0", "source": "resolved-lockfile"},
+        ]}
+        dialog = InventoryTechnologiesDialog(project, [])
+        self.assertFalse(dialog.inventory_table.item(0, 3).flags() & Qt.ItemFlag.ItemIsEditable)
+        self.assertFalse(dialog.inventory_table.item(0, 0).flags() & Qt.ItemFlag.ItemIsEditable)
+        dialog.inventory_table.selectRow(0)
+        dialog.edit_button.click()
+        self.assertEqual(dialog.tabs.currentIndex(), 1)
+        self.assertEqual(dialog.version.text(), "1.0.0")
+        dialog.version.setText("1.1.0")
+        dialog._add_or_update()
+        self.assertEqual(dialog.manual, [{"name": "shared", "category": "dependencies",
+            "version": "1.1.0", "ecosystem": "npm", "replaces_version": "1.0.0"}])
+        self.assertEqual(sorted(dialog.inventory_table.item(row, 3).text()
+                                for row in range(dialog.inventory_table.rowCount())),
+                         ["1.1.0", "2.0.0"])
+        dialog.inventory_table.selectRow(0)
+        dialog.edit_button.click()
+        dialog.version.setText("1.2.0")
+        dialog._add_or_update()
+        self.assertEqual(dialog.manual[0]["replaces_version"], "1.0.0")
+        self.assertEqual(dialog.manual[0]["version"], "1.2.0")
+        dialog._save()
+        self.assertEqual(dialog.result(), dialog.DialogCode.Accepted)
+        dialog.close()
+        dialog.deleteLater()
+        application.processEvents()
+
+    def test_inventory_dialog_can_exclude_a_replaced_dependency(self) -> None:
+        application = QApplication.instance() or QApplication([])
+        dialog = InventoryTechnologiesDialog({"id": "workspace", "technology_inventory": [
+            {"category": "dependencies", "name": "example.test/old",
+             "ecosystem": "go", "source": "go-replaced", "version": ""},
+        ]}, [])
+        dialog.add_button.click()
+        dialog.name.setText("example.test/old")
+        dialog.category.setCurrentIndex(dialog.category.findData("dependencies"))
+        dialog.ecosystem.setCurrentText("go")
+        dialog.exclude.setChecked(True)
+        dialog._add_or_update()
+        self.assertTrue(dialog.manual[0]["exclude"])
+        self.assertEqual(dialog.inventory_table.item(0, 5).text(), "Excluded by user")
+        dialog.inventory_table.selectRow(0)
+        dialog.edit_button.click()
+        self.assertTrue(dialog.exclude.isChecked())
+        self.assertEqual(dialog.name.text(), "example.test/old")
+        dialog.tabs.setCurrentIndex(0)
+        dialog.remove_button.click()
+        self.assertEqual(dialog.manual, [])
+        self.assertEqual(dialog.inventory_table.item(0, 5).text(), "Go-Replaced")
+        dialog._save()
+        self.assertEqual(dialog.result(), dialog.DialogCode.Accepted)
         dialog.close()
         dialog.deleteLater()
         application.processEvents()
@@ -107,7 +266,7 @@ class DesktopWindowTest(unittest.TestCase):
         window.deleteLater()
         application.processEvents()
 
-    def test_run_check_log_tab_uses_page_height_and_keeps_activity_running(self) -> None:
+    def test_run_check_baselines_and_log_have_separate_full_height_tabs(self) -> None:
         application = QApplication.instance() or QApplication([])
         window = MainWindow()
         window.resize(980, 680)
@@ -118,15 +277,19 @@ class DesktopWindowTest(unittest.TestCase):
 
         self.assertEqual(
             [window.run_tabs.tabText(index) for index in range(window.run_tabs.count())],
-            ["Activity", "Detailed log"],
+            ["Activity", "Technology baselines", "Detailed log"],
         )
+        self.assertTrue(window.run_tabs.widget(1).isAncestorOf(window.technology_scan_tree))
+        self.assertGreater(window.technology_scan_tree.height(), 250)
+        window.run_tabs.setCurrentIndex(2)
+        application.processEvents()
         self.assertGreater(window.log.height(), 250)
         window.run_journey.start("ai-check")
         window._handle_analysis_progress({
             "phase": "consolidation", "status": "running", "provider": "codex",
             "completed": 1, "total": 2, "message": "Consolidating evidence",
         })
-        self.assertEqual(window.run_tabs.currentIndex(), 1)
+        self.assertEqual(window.run_tabs.currentIndex(), 2)
         self.assertEqual(window.run_journey.phase, "consolidation")
         self.assertTrue(window.run_journey.timer.isActive())
         window.run_journey.finish(True)
@@ -301,7 +464,10 @@ class DesktopWindowTest(unittest.TestCase):
         ), patch(
             "desktop.main_window.QMessageBox.question",
             return_value=QMessageBox.StandardButton.Yes,
-        ) as question, patch.object(window, "start_action") as start:
+        ) as question, patch(
+            "desktop.main_window.services.write_technology_selection",
+            return_value=Path("/private/selection.json"),
+        ), patch.object(window, "start_action") as start:
             window.run_ai_analysis()
 
         message = question.call_args.args[2]
@@ -311,6 +477,7 @@ class DesktopWindowTest(unittest.TestCase):
         start.assert_called_once_with(
             "ai-check", provider="codex", profile="balanced", mode="economical",
             assume_yes=True, non_interactive=True,
+            technology_selection_file=Path("/private/selection.json"),
         )
         window.close()
         window.deleteLater()
@@ -338,6 +505,12 @@ class DesktopWindowTest(unittest.TestCase):
             ["-", "Codex", "Claude"],
         )
         self.assertEqual(selector.currentData(), "claude")
+        self.assertEqual(item.childCount(), 0)
+        self.assertIn("Python version missing", item.text(4))
+        self.assertEqual(window.edit_technologies_button.text(), "Details")
+        self.assertFalse(window.edit_technologies_button.isEnabled())
+        window.inventory_tree.setCurrentItem(item)
+        self.assertTrue(window.edit_technologies_button.isEnabled())
 
         item.setCheckState(0, Qt.CheckState.Checked)
         selector.setCurrentIndex(selector.findData("codex"))
@@ -345,7 +518,9 @@ class DesktopWindowTest(unittest.TestCase):
             "desktop.main_window.QMessageBox.information",
             return_value=QMessageBox.StandardButton.Ok,
         ), patch("desktop.main_window.services.inventory_projects", return_value=[]):
-            window.save_inventory_preferences()
+            with patch.object(window, "load_initialization_scope") as reload_scope:
+                window.save_inventory_preferences()
+                reload_scope.assert_called_once_with()
         save.assert_called_once_with({
             "/private/api": {"enabled": True, "preferred_ai": "codex"},
         })
@@ -378,7 +553,7 @@ class DesktopWindowTest(unittest.TestCase):
                 if window.navigation.item(index).flags() & Qt.ItemFlag.ItemIsSelectable
             ],
             [
-                "Dashboard", "Reports", "AI issue assistant", "Run check", "Logs",
+                "Dashboard", "Reports", "Run check", "AI issue assistant", "Logs",
                 "Inventory", "Configuration", "System status", "User guide", "About",
             ],
         )

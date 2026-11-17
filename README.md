@@ -348,10 +348,19 @@ selected when the complete analysis starts. An explicit Codex or Claude choice
 routes that project to the matching authenticated CLI. These settings are
 stored only in the ignored `config/local/projects.yaml` and survive inventory
 refreshes.
-Select a project and use **Edit technologies for selected project…** to add a
-technology with its category, optional version, and context. fAIry marks it as
-manual and preserves it across inventory refreshes. The AI uses it as a scope
-hint, then verifies actual use and version before assessing an advisory.
+Each project occupies one inventory row with a technology summary. Select a
+project and use **Details** to add a
+technology with its category, optional version, and context. The dialog has
+an **Inventory technologies** tab for the table and an **Add / edit technology**
+tab for the form. Select a row and click **Edit selected**, or double-click it,
+to load its values in the form. Apply the change, then save the dialog. fAIry marks the correction as
+manual and uses the saved value as the current inventory override. Inventory
+quality is shown as red for a missing version, orange for a declared, constrained,
+manual, or otherwise uncertain version, and green only for an exact lockfile-resolved
+or locally verified version; these colors do not indicate
+vulnerability status. An explicit inventory refresh warns that it
+will replace technology/version edits, creates a private configuration backup,
+and preserves only project inclusion and Preferred AI choices.
 
 Supported advisory source types are `html`, `rss`, `atom`, `json`, `api`, and
 `repository`. Each source declares its name, URL, category or filter,
@@ -431,8 +440,8 @@ Invoke in Claude Code with:
 /fairy-security-advisory run the complete security advisory check
 ```
 
-The shared skill reads the configuration, refreshes the inventory when
-necessary, checks active sources, verifies primary sources, correlates manifests
+The shared skill reads the configuration, reports when the inventory is stale
+without replacing it, checks active sources, verifies primary sources, correlates manifests
 and lockfiles, incorporates OSV-Scanner/Trivy results when available, and
 updates reports and follow-ups. It analyzes only inventory projects selected
 for advisory checks and routes explicit per-project AI selections to the
@@ -488,8 +497,8 @@ Before option 10 starts an analysis, the service verifies that:
 - every AI CLI required by the project routing plan is installed and
   authenticated;
 - local configuration exists and all enabled project roots are readable;
-- the inventory exists and is within `refresh_after_hours`, offering to refresh
-  it when necessary;
+- the inventory exists; its `refresh_after_hours` age is reported, but refresh
+  remains a separate, explicitly confirmed user action;
 - configuration validation succeeds;
 - every active advisory source is reachable.
 
@@ -544,7 +553,7 @@ confirmed run at a time without affecting reports, follow-up, configuration, or
 scanned projects. Empty archive folders are removed automatically.
 
 In **Reports**, **Clear reports and follow-up…** moves current daily reports,
-summary, active follow-up, and closed-issue archives to a private snapshot below
+summary, active follow-up, closed-issue archives, and advisory baseline state to a private snapshot below
 `output/report-resets/`. This empties the current report view so a complete AI
 check can rebuild it. Reset snapshots are manual backups and are not consulted
 by the next check. Previous issue IDs and resolution states are not carried
@@ -589,9 +598,52 @@ the shared AI skill used by Codex and Claude Code.
 ### Subsequent checks
 
 For later checks, invoke the same skill again. It refreshes the inventory when
-it is older than `inventory.refresh_after_hours`, preserves evidence already in
-the report for the current UTC date, and carries unfinished follow-up activities
-into the new report.
+requested explicitly, preserves evidence already in the report for the current
+UTC date, and carries unfinished follow-up activities into the new report. A
+stale inventory is reported but never refreshed implicitly.
+
+Run check lists canonical technology/version combinations across selected
+projects. Combinations without a baseline are preselected for a historical
+initialization scan; already covered combinations remain available for a manual
+rescan. A hybrid run resolves each selected version's official release date and
+searches its baseline from that date through today, while retaining the
+per-source incremental window for technologies already initialized. Initialization and incremental runs append to the same daily report,
+with initialization sections labeled explicitly. Successful sources receive
+independent checkpoints; later runs start from each source's last success minus
+the configurable overlap (10 days by default). Failed or partial sources do not
+advance. State is private under `output/advisory-state.json`; technologies no
+longer present are removed from active state while prior daily reports remain
+the historical record.
+The desktop transfers large checkbox selections through a private short-lived
+JSON request under `output/analysis-requests/`; the launcher validates and
+consumes it into the authoritative plan, rejects symbolic-link request paths, avoiding operating-system command-line
+length limits. A successful coordinator must also produce a validated private
+`evidence-state.json` receipt accounting for every selected baseline and active
+source; completed baselines must include release date and searched interval
+before checkpoints are updated. Lockfile inventory preserves distinct versions
+of the same package and reads Composer, npm, Yarn, pnpm, Pipenv, Poetry, uv,
+Cargo, and Bundler resolution files. Go requirements in `go.mod` are retained
+as uncertain minimum-version hints. The scanner also reads in-scope `go.work`
+modules and keeps replacement targets as candidates for human review.
+Go baselines stay partial until the effective version is confirmed in Inventory.
+Manual dependency edits can target a specific ecosystem, so same-name packages
+in other ecosystems retain their own versions. A human can explicitly exclude a
+detected dependency that is not used, for example the original module behind a
+confirmed Go replacement; this decision remains local until the next deliberate
+inventory refresh.
+
+Release metadata uses a versioned, environment-neutral shared cache under
+`data/release-cache/` and a private local overlay under `output/cache/`.
+Recognized public package ecosystems may use the deps.dev batch API when the
+effective `reports.release_metadata.online_enabled` setting is true. The cache
+stores provenance and avoids repeating immutable release-date lookups. Package
+dependencies anchor at their exact resolved version; platforms anchor at the
+beginning of the applicable release line. Verified local entries can be
+exported for explicit human review with `--action release-cache-export`; the
+command never edits or publishes the shared cache automatically.
+Run archives use `completed` only for complete requested coverage,
+`completed-with-limitations` when at least one baseline or source is partial or
+failed, and `failed` when every selected baseline fails.
 
 ### Advanced non-interactive use
 

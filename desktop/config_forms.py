@@ -486,10 +486,17 @@ class ReportsConfigForm(QWidget):
         self.language.addItems(("en", "it"))
         self.include_open = QCheckBox("Repeat unfinished activities in later daily reports")
         self.preserve_evidence = QCheckBox("Keep existing evidence when updating a report")
+        self.incremental_overlap = QSpinBox()
+        self.incremental_overlap.setRange(1, 90)
+        self.incremental_overlap.setSuffix(" days")
+        self.incremental_overlap.setToolTip(
+            "Recheck this many days before each source's last successful checkpoint."
+        )
         behavior_form.addRow("Timezone", self.timezone)
         behavior_form.addRow("Report language", self.language)
         behavior_form.addRow(self.include_open)
         behavior_form.addRow(self.preserve_evidence)
+        behavior_form.addRow("Incremental overlap", self.incremental_overlap)
         groups.addWidget(behavior, 0, 1)
 
         risk_group = QGroupBox("Risk levels")
@@ -528,6 +535,7 @@ class ReportsConfigForm(QWidget):
         self.language.setCurrentText(str(reports.get("language", "en")))
         self.include_open.setChecked(bool(reports.get("include_open_followups", True)))
         self.preserve_evidence.setChecked(bool(reports.get("preserve_existing_evidence", True)))
+        self.incremental_overlap.setValue(int(reports.get("incremental_overlap_days", 10)))
         risks = [str(value) for value in reports.get("risk_levels", self.RISK_LEVELS) or []]
         classifications = [
             str(value) for value in reports.get("classifications", self.CLASSIFICATIONS) or []
@@ -560,6 +568,7 @@ class ReportsConfigForm(QWidget):
             "language": self.language.currentText().strip() or "en",
             "include_open_followups": self.include_open.isChecked(),
             "preserve_existing_evidence": self.preserve_evidence.isChecked(),
+            "incremental_overlap_days": self.incremental_overlap.value(),
             "risk_levels": [
                 value for value, checkbox in self.risk_checks.items() if checkbox.isChecked()
             ] + self._extra_risks,

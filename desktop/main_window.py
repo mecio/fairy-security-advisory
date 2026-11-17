@@ -292,11 +292,23 @@ class MainWindow(QMainWindow):
         self.chat_process.setWorkingDirectory(str(services.ROOT))
         self.chat_process.setProcessChannelMode(QProcess.ProcessChannelMode.SeparateChannels)
         self.chat_process.setProcessEnvironment(process_environment)
+        self.chat_process.started.connect(self._chat_started)
         self.chat_process.readyReadStandardOutput.connect(self._read_chat_output)
         self.chat_process.finished.connect(self._chat_finished)
+        self.chat_process.errorOccurred.connect(self._chat_error)
         self.chat_response = ""
+        self.chat_start_failed = False
+        self.chat_stop_requested = False
+        self.chat_busy_issue_id = ""
+        self.chat_busy_started_at: float | None = None
+        self.chat_busy_message = ""
+        self.chat_busy_tick = 0
+        self.chat_busy_timer = QTimer(self)
+        self.chat_busy_timer.setInterval(500)
+        self.chat_busy_timer.timeout.connect(self._update_chat_busy)
         self.pending_issue_update: tuple[str, dict[str, str]] | None = None
         self.current_action: str | None = None
+        self.pending_selection_file: Path | None = None
         self.process_output_buffer = ""
         self.analysis_activity_base = ""
         self.analysis_started_at: float | None = None
@@ -331,8 +343,8 @@ class MainWindow(QMainWindow):
         navigation_entries: tuple[tuple[str, int] | None, ...] = (
             ("Dashboard", PAGE_DASHBOARD),
             ("Reports", PAGE_REPORTS),
-            ("AI issue assistant", PAGE_ASSISTANT),
             ("Run check", PAGE_RUN),
+            ("AI issue assistant", PAGE_ASSISTANT),
             ("Logs", PAGE_LOGS),
             None,
             ("Inventory", PAGE_INVENTORY),
@@ -841,7 +853,8 @@ class MainWindow(QMainWindow):
         buttons.addStretch()
         layout.addLayout(buttons)
         technology_actions = QHBoxLayout()
-        self.edit_technologies_button = QPushButton("Edit technologies for selected project…")
+        self.edit_technologies_button = QPushButton("Details")
+        self.edit_technologies_button.setToolTip("View and edit technologies for the selected project")
         self.edit_technologies_button.setProperty("variant", "info")
         self.edit_technologies_button.setEnabled(False)
         self.edit_technologies_button.clicked.connect(self.edit_inventory_technologies)
@@ -1021,6 +1034,21 @@ class MainWindow(QMainWindow):
         )
         layout.addWidget(self.assistant_conversation, 1)
 
+        busy = QHBoxLayout()
+        self.assistant_busy_label = QLabel("AI is preparing a response")
+        self.assistant_busy_label.setStyleSheet("color:#c4b5fd; font-weight:600;")
+        self.assistant_busy_label.setVisible(False)
+        busy.addWidget(self.assistant_busy_label)
+        self.assistant_busy_progress = QProgressBar()
+        self.assistant_busy_progress.setRange(0, 0)
+        self.assistant_busy_progress.setTextVisible(False)
+        self.assistant_busy_progress.setFixedWidth(150)
+        self.assistant_busy_progress.setAccessibleName("AI response in progress")
+        self.assistant_busy_progress.setVisible(False)
+        busy.addWidget(self.assistant_busy_progress)
+        busy.addStretch()
+        layout.addLayout(busy)
+
         quick = QHBoxLayout()
         for label, prompt in (
             ("Ask for advice", "What should we verify or do next for this issue?"),
@@ -1048,6 +1076,11 @@ class MainWindow(QMainWindow):
         self.assistant_send_button.setProperty("variant", "ai")
         self.assistant_send_button.clicked.connect(self.send_assistant_message)
         actions.addWidget(self.assistant_send_button)
+        self.assistant_stop_button = QPushButton("Stop AI response")
+        self.assistant_stop_button.setProperty("variant", "danger")
+        self.assistant_stop_button.setEnabled(False)
+        self.assistant_stop_button.clicked.connect(self.stop_assistant_message)
+        actions.addWidget(self.assistant_stop_button)
         self.assistant_apply_button = QPushButton("Review proposed issue update")
         self.assistant_apply_button.setProperty("variant", "warning")
         self.assistant_apply_button.setEnabled(False)
@@ -1090,6 +1123,25 @@ class MainWindow(QMainWindow):
             "color:#c9dded; padding:9px 12px; margin:2px 0 4px 0;"
         )
         layout.addWidget(routing_notice)
+
+        scope_label = QLabel(
+            "Technology baselines — missing combinations are selected automatically. "
+            "Select an existing baseline to run a manual historical rescan."
+        )
+        scope_label.setWordWrap(True)
+        scope_label.setStyleSheet("color:#9fb8cc; padding:4px 0;")
+        self.technology_scan_tree = QTreeWidget()
+        self.technology_scan_tree.setHeaderLabels((
+            "Scan", "Technology", "Version", "Inventory quality", "Baseline", "Projects",
+        ))
+        self.technology_scan_tree.setRootIsDecorated(False)
+        self.technology_scan_tree.setAlternatingRowColors(True)
+        for column in (0, 2, 3, 4):
+            self.technology_scan_tree.header().setSectionResizeMode(
+                column, QHeaderView.ResizeMode.ResizeToContents,
+            )
+        self.technology_scan_tree.header().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        self.technology_scan_tree.header().setSectionResizeMode(5, QHeaderView.ResizeMode.Stretch)
 
         buttons = QHBoxLayout()
         prerequisites = QPushButton("Check prerequisites")
@@ -1152,6 +1204,14 @@ class MainWindow(QMainWindow):
         activity_layout.addWidget(self.analysis_elapsed_label)
         activity_page_layout.addWidget(activity)
         self.run_tabs.addTab(activity_page, "Activity")
+
+        baseline_page = QWidget()
+        baseline_layout = QVBoxLayout(baseline_page)
+        baseline_layout.setContentsMargins(8, 10, 8, 8)
+        baseline_layout.setSpacing(8)
+        baseline_layout.addWidget(scope_label)
+        baseline_layout.addWidget(self.technology_scan_tree, 1)
+        self.run_tabs.addTab(baseline_page, "Technology baselines")
 
         log_page = QWidget()
         log_layout = QVBoxLayout(log_page)
@@ -1377,6 +1437,7 @@ class MainWindow(QMainWindow):
 
     def refresh_all(self) -> None:
         self.load_inventory()
+        self.load_initialization_scope()
         self.load_reports()
         self.load_analysis_logs()
         self.load_status()
@@ -1606,6 +1667,43 @@ class MainWindow(QMainWindow):
         self.update_inventory_count()
         self._update_inventory_technology_action()
 
+    def load_initialization_scope(self) -> None:
+        if not hasattr(self, "technology_scan_tree"):
+            return
+        self.technology_scan_tree.clear()
+        quality_labels = {"green": "Certain", "orange": "Uncertain", "red": "Missing"}
+        quality_colors = {
+            "green": QColor("#66d38f"), "orange": QColor("#e5a84b"), "red": QColor("#df6f6f"),
+        }
+        try:
+            rows = services.initialization_scan_rows()
+        except services.ConfigurationError as error:
+            item = QTreeWidgetItem(("", "Advisory state unavailable", "—", "Missing", "Blocked", str(error)))
+            item.setForeground(3, QColor("#df6f6f"))
+            item.setForeground(4, QColor("#df6f6f"))
+            self.technology_scan_tree.addTopLevelItem(item)
+            return
+        for row in rows:
+            item = QTreeWidgetItem((
+                "", row["name"], row.get("version") or "—",
+                quality_labels.get(row["quality"], row["quality"]),
+                row["baseline_status"].replace("-", " ").title(),
+                ", ".join(row["projects"]),
+            ))
+            item.setData(0, Qt.ItemDataRole.UserRole, row["key"])
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            item.setCheckState(
+                0, Qt.CheckState.Checked if row["selected"] else Qt.CheckState.Unchecked,
+            )
+            color = quality_colors.get(row["quality"])
+            if color:
+                item.setForeground(2, color)
+                item.setForeground(3, color)
+            item.setToolTip(
+                3, "Version evidence quality only; this is not a vulnerability status."
+            )
+            self.technology_scan_tree.addTopLevelItem(item)
+
     def _update_inventory_technology_action(self) -> None:
         self.edit_technologies_button.setEnabled(self.inventory_tree.currentItem() is not None)
 
@@ -1635,12 +1733,12 @@ class MainWindow(QMainWindow):
         except (OSError, ValueError, services.ConfigurationError) as error:
             QMessageBox.critical(self, "Unable to save technologies", str(error))
             return
-        labels = ", ".join(services.inventory_technology_labels(updated))
-        item.setText(4, labels)
-        item.setToolTip(4, labels)
+        self.load_inventory()
+        self.load_initialization_scope()
         QMessageBox.information(
             self, "Technologies saved",
-            "Manual technologies were saved in ignored local configuration and will survive inventory refreshes.",
+            "Technology overrides were saved in ignored local configuration. A future explicit "
+            "inventory refresh will replace them after warning and confirmation.",
         )
 
     def update_inventory_count(self, _item: QTreeWidgetItem | None = None, _column: int = 0) -> None:
@@ -1668,6 +1766,7 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Unable to save project choices", str(error))
             return
         self.load_inventory()
+        self.load_initialization_scope()
         QMessageBox.information(
             self, "Project choices saved",
             "Advisory inclusion and preferred AI choices were saved in ignored local configuration.",
@@ -1676,7 +1775,10 @@ class MainWindow(QMainWindow):
     def refresh_inventory(self) -> None:
         if QMessageBox.question(
             self, "Refresh inventory",
-            "Scan the configured project roots in read-only mode and update the ignored local inventory?",
+            "Scan the configured project roots and replace detected technologies, versions, "
+            "and manual technology edits?\n\nProject Check and Preferred AI choices will be "
+            "preserved. A private configuration backup, including the current inventory, "
+            "will be created before replacement.",
         ) == QMessageBox.StandardButton.Yes:
             self.start_action("refresh", assume_yes=True)
 
@@ -2078,6 +2180,11 @@ class MainWindow(QMainWindow):
             blocks.append(
                 f"<p><b style='color:{color}'>{label}</b><br>{content}</p>"
             )
+        if self.chat_busy_started_at is not None and issue.get("ID") == self.chat_busy_issue_id:
+            blocks.append(
+                "<p style='color:#c4b5fd'><b>AI assistant</b><br>"
+                "Preparing a response…</p>"
+            )
         self.assistant_conversation.setHtml("".join(blocks))
         self.assistant_conversation.moveCursor(QTextCursor.MoveOperation.End)
 
@@ -2085,6 +2192,76 @@ class MainWindow(QMainWindow):
         self.assistant_input.setPlainText(text)
         self.assistant_input.setFocus()
         self.assistant_input.moveCursor(QTextCursor.MoveOperation.End)
+
+    def _set_chat_busy(self, issue_id: str = "", message: str = "") -> None:
+        if issue_id:
+            self.chat_busy_issue_id = issue_id
+            self.chat_busy_started_at = time.monotonic()
+            self.chat_busy_message = message or "AI is preparing a response"
+            self.chat_busy_tick = 0
+            self.chat_busy_timer.start()
+            self.assistant_busy_label.setVisible(True)
+            self.assistant_busy_progress.setVisible(True)
+            self._update_chat_busy()
+            return
+        self.chat_busy_timer.stop()
+        self.chat_busy_started_at = None
+        self.chat_busy_issue_id = ""
+        self.assistant_busy_label.setVisible(False)
+        self.assistant_busy_progress.setVisible(False)
+
+    def _update_chat_busy(self) -> None:
+        if self.chat_busy_started_at is None:
+            return
+        elapsed = int(time.monotonic() - self.chat_busy_started_at)
+        dots = "." * (self.chat_busy_tick % 4)
+        self.chat_busy_tick += 1
+        self.assistant_busy_label.setText(f"{self.chat_busy_message}{dots} · {elapsed}s")
+
+    def _chat_started(self) -> None:
+        if self.chat_stop_requested:
+            self.chat_process.terminate()
+            return
+        self.chat_busy_message = f"AI is preparing a response for {self.chat_busy_issue_id}"
+        self._update_chat_busy()
+
+    def stop_assistant_message(self) -> None:
+        if self.chat_process.state() == QProcess.ProcessState.NotRunning:
+            return
+        self.chat_stop_requested = True
+        self.assistant_stop_button.setEnabled(False)
+        self.chat_busy_message = "Stopping AI response"
+        self._update_chat_busy()
+        self.statusBar().showMessage("Stopping the current AI response…")
+        self.chat_process.terminate()
+        QTimer.singleShot(3000, self._kill_chat_if_running)
+
+    def _kill_chat_if_running(self) -> None:
+        if self.chat_stop_requested and self.chat_process.state() != QProcess.ProcessState.NotRunning:
+            self.chat_process.kill()
+
+    def _finish_stopped_chat(self) -> None:
+        self.chat_stop_requested = False
+        self.chat_response = ""
+        self._set_chat_busy()
+        self.assistant_stop_button.setEnabled(False)
+        self.load_assistant_conversation()
+        self.assistant_send_button.setEnabled(bool(self.selected_assistant_issue()))
+        self.statusBar().showMessage("AI response stopped", 5000)
+
+    def _chat_error(self, error: QProcess.ProcessError) -> None:
+        if error != QProcess.ProcessError.FailedToStart:
+            return
+        self.chat_start_failed = True
+        if self.chat_stop_requested:
+            self._finish_stopped_chat()
+            return
+        self._set_chat_busy()
+        self.assistant_stop_button.setEnabled(False)
+        self.load_assistant_conversation()
+        self.assistant_send_button.setEnabled(bool(self.selected_assistant_issue()))
+        self.statusBar().showMessage("AI assistant could not start", 8000)
+        QMessageBox.critical(self, "AI assistant could not start", self.chat_process.errorString())
 
     def send_assistant_message(self) -> None:
         issue = self.selected_assistant_issue()
@@ -2129,10 +2306,14 @@ class MainWindow(QMainWindow):
             return
         self.assistant_input.clear()
         self.chat_response = ""
+        self.chat_start_failed = False
+        self.chat_stop_requested = False
         self.pending_issue_update = None
         self.assistant_apply_button.setEnabled(False)
         self.assistant_send_button.setEnabled(False)
+        self.assistant_stop_button.setEnabled(True)
         self.statusBar().showMessage(f"Waiting for AI guidance on {issue_id}…")
+        self._set_chat_busy(issue_id)
         self.load_assistant_conversation()
         self.assistant_send_button.setEnabled(False)
         self.chat_process.setProperty("issue_id", issue_id)
@@ -2140,14 +2321,26 @@ class MainWindow(QMainWindow):
         self.chat_process.closeWriteChannel()
 
     def _read_chat_output(self) -> None:
-        self.chat_response += bytes(
+        chunk = bytes(
             self.chat_process.readAllStandardOutput()
         ).decode("utf-8", errors="replace")
+        self.chat_response += chunk
+        if chunk and self.chat_busy_started_at is not None:
+            self.chat_busy_message = "Receiving AI response"
+            self._update_chat_busy()
 
     def _chat_finished(self, exit_code: int, _status: QProcess.ExitStatus) -> None:
+        if self.chat_start_failed:
+            return
+        if self.chat_stop_requested:
+            self._finish_stopped_chat()
+            return
         self._read_chat_output()
+        self._set_chat_busy()
+        self.assistant_stop_button.setEnabled(False)
         issue_id = str(self.chat_process.property("issue_id") or "")
-        if exit_code != 0:
+        if exit_code != 0 or _status != QProcess.ExitStatus.NormalExit:
+            self.load_assistant_conversation()
             error = bytes(self.chat_process.readAllStandardError()).decode(
                 "utf-8", errors="replace",
             ).strip()
@@ -2579,27 +2772,45 @@ class MainWindow(QMainWindow):
             "The agent may access the network and update ignored local output files.",
         ) != QMessageBox.StandardButton.Yes:
             return
+        technology_keys = [
+            str(self.technology_scan_tree.topLevelItem(index).data(0, Qt.ItemDataRole.UserRole))
+            for index in range(self.technology_scan_tree.topLevelItemCount())
+            if self.technology_scan_tree.topLevelItem(index).checkState(0) == Qt.CheckState.Checked
+        ]
+        try:
+            technology_selection_file = services.write_technology_selection(technology_keys)
+        except (OSError, services.ConfigurationError) as error:
+            QMessageBox.critical(self, "Unable to save technology selection", str(error))
+            return
         self.start_action(
             "ai-check", provider=provider, profile=profile, mode=mode,
             assume_yes=True, non_interactive=True,
+            technology_selection_file=technology_selection_file,
         )
 
     def start_action(
         self, action: str, *, provider: str | None = None,
         profile: str | None = None, mode: str | None = None,
         assume_yes: bool = False, non_interactive: bool = False,
+        technology_keys: list[str] | None = None,
+        technology_selection_file: Path | None = None,
     ) -> None:
         if self.process.state() != QProcess.ProcessState.NotRunning:
+            if technology_selection_file is not None:
+                technology_selection_file.unlink(missing_ok=True)
             QMessageBox.warning(self, "Process already running", "Stop or wait for the current operation first.")
             return
         command = services.action_command(
             action, provider=provider, profile=profile, mode=mode,
             assume_yes=assume_yes, non_interactive=non_interactive,
+            technology_keys=technology_keys,
+            technology_selection_file=technology_selection_file,
         )
         self._navigate_to_page(PAGE_RUN)
         self.run_tabs.setCurrentIndex(0)
         self.log.appendPlainText(f"\n$ {shlex.join(command)}\n")
         self.current_action = action
+        self.pending_selection_file = technology_selection_file
         self.process_output_buffer = ""
         self.run_journey.start(action)
         if action == "ai-check":
@@ -2678,7 +2889,7 @@ class MainWindow(QMainWindow):
         self._update_analysis_activity_clock()
         if status == "failed":
             self._finish_analysis_activity(False, activity)
-        elif status == "completed" and phase == "complete":
+        elif status in {"completed", "completed-with-limitations"} and phase == "complete":
             self._finish_analysis_activity(True, activity)
 
     def _update_analysis_activity_clock(self) -> None:
@@ -2730,6 +2941,9 @@ class MainWindow(QMainWindow):
         if self.current_action == "ai-check" and self.analysis_started_at is not None:
             self._finish_analysis_activity(successful)
         self.current_action = None
+        if self.pending_selection_file is not None:
+            self.pending_selection_file.unlink(missing_ok=True)
+        self.pending_selection_file = None
         self.stop_button.setEnabled(False)
         self.statusBar().showMessage(
             "Operation completed" if successful else f"Operation failed with exit code {exit_code}", 8000,
@@ -2748,6 +2962,9 @@ class MainWindow(QMainWindow):
         if self.current_action == "ai-check" and self.analysis_started_at is not None:
             self._finish_analysis_activity(False)
         self.log.appendPlainText(f"\nCould not start process: {self.process.errorString()}\n")
+        if self.pending_selection_file is not None:
+            self.pending_selection_file.unlink(missing_ok=True)
+            self.pending_selection_file = None
         self.current_action = None
         self.stop_button.setEnabled(False)
         self.statusBar().showMessage("Could not start operation", 8000)
@@ -2777,6 +2994,8 @@ class MainWindow(QMainWindow):
                 event.ignore()
                 return
             for process in active:
+                if process is self.chat_process:
+                    self.chat_stop_requested = True
                 process.kill()
                 process.waitForFinished(2000)
         event.accept()

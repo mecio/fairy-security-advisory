@@ -308,9 +308,14 @@ subscription remainder.
 
 ## Technology inventory
 
-The Technology inventory page shows the structured inventory stored in local
-configuration. Each row identifies a detected project, its probable roles, and
-technologies supported by file, manifest, lockfile, or configuration evidence.
+The Technology inventory page shows one row per project, with its roles and a
+summary of technologies and effective versions. Select a project and click
+**Details** to inspect the individual technologies and their version evidence.
+In the detail table, red means missing, orange means declared, uncertain, or
+constrained, and green means exact and resolved from a lockfile or verified
+locally. Manually supplied versions remain orange until independently verified.
+These colors describe version evidence only, never security risk. The inventory
+includes technologies supported by file, manifest, lockfile, or configuration evidence.
 Roles such as frontend, backend, infrastructure, or mixed are classification
 aids rather than access permissions. Scanner findings remain read-only. You can
 also add, edit, or remove separate manual technologies for a selected project.
@@ -327,13 +332,15 @@ routes that project to the matching CLI and to that provider's model in the
 selected profile. Click **Save project choices** to write these choices to
 ignored local configuration.
 
-Select a project and open **Edit technologies for selected project…** to add a
-technology the scanner missed. Choose its category and optionally enter a
-version and context or evidence. For example, a database used by the project
-can be added under **Database** even when no manifest names it. The dialog
-shows scanner findings separately; manual entries appear in the inventory
-column with a **[manual]** marker. Use **Add or update**, **Remove selected**,
-then **Save changes**. A manual version is a user statement until checked
+Select a project and open **Details**. The
+**Inventory technologies** tab lists detected technologies, manual changes,
+and exclusions. Select a row and click **Edit selected**, or double-click the
+row, to open its values in the **Add / edit technology** tab. Change the version
+or other fields, then click **Apply change** and **Save changes**. Editing one
+version leaves other detected versions of the same package in place. Use
+**Add technology** to open a blank form for a missed technology, such as a
+database not named in a manifest. **Remove manual decision** removes a saved
+override or exclusion; detected findings remain in the inventory. A manual version is a user statement until checked
 against the environment; it never proves the version running in production.
 Only the Git-ignored `config/local/projects.yaml` is updated.
 
@@ -353,9 +360,12 @@ changing exclusions, or making significant dependency changes. The refresh:
 4. writes the resulting structured inventory only to ignored local
    configuration.
 
-Refreshing preserves saved project checkboxes, preferred-AI choices, and manual
-technologies for projects detected at the same path. Newly discovered projects are
-selected by default and use **-** as their AI preference.
+Before replacement, fAIry warns that technology/version edits will be lost and
+creates a private configuration backup containing the previous inventory.
+Refreshing preserves saved project checkboxes and preferred-AI choices, but
+replaces detected and manual technology/version entries. Newly discovered
+projects are selected by default and use **-** as their AI preference. A stale
+inventory is reported before analysis but is never refreshed implicitly.
 
 The scanner does not update dependencies, run project installers, or rewrite
 manifests. Paths shown here are local operational data and must not be copied
@@ -378,7 +388,7 @@ underlying ignored Markdown files.
 
 **Clear reports and follow-up…** prepares a fresh verification. After an
 explicit confirmation, it moves the current summary, daily reports, active
-follow-up, and closed-issue archives into a private timestamped directory under
+follow-up, closed-issue archives, and advisory baseline state into a private timestamped directory under
 `output/report-resets/`. The Reports view and dashboard then start empty. The
 next complete AI check rebuilds the current files from the selected inventory
 and new advisory evidence. Reset snapshots remain available as manual backups,
@@ -464,6 +474,12 @@ Guided prompts help record ownership, discuss resolution evidence, or explain
 non-applicability. The AI runs with read-only or planning permissions. If it
 detects a clear management update, it may propose one of the restricted actions
 `take_ownership`, `resolve`, `not_applicable`, or `update`.
+After sending, the conversation shows a temporary AI response placeholder and
+an animated progress indicator with elapsed time. They clear when the response
+arrives or the process fails to start or exits with an error.
+**Stop AI response** terminates the active assistant process. Partial output is
+discarded, no assistant reply or issue update is saved, and the chat becomes
+available for another message after the process stops.
 
 **Review proposed issue update** displays the exact fields before anything is
 written. A separate confirmation is required, and the deterministic updater
@@ -485,6 +501,38 @@ or transmitted and the GUI offers the guided sandbox configuration.
 The Run security checks page contains deterministic preparation commands and
 the complete AI-assisted workflow. Choose an AI provider, model profile, and
 execution mode before starting the full analysis.
+
+The **Technology baselines** tab sits beside **Activity** and **Detailed log**
+and uses the full tab area for the selection table. Its list deduplicates identical technology/version
+combinations across selected projects. Missing baselines are preselected for a
+historical initialization scan; covered combinations remain available for a
+manual rescan. Historical coverage starts at the selected version's official
+release date, while the same hybrid run retains a separate incremental window
+for already initialized technologies. Unknown versions receive a generic partial baseline and remain
+red in Inventory until a human supplies better evidence. Initialization and
+incremental runs append to the same daily report, with initialization labeled
+explicitly.
+Go requirements from `go.mod` show minimum-version hints in orange. The scanner
+also reads `go.work` modules inside the selected project. A `replace` directive
+leaves the original version unknown; remote forks are listed as unverified
+candidates. Workspace modules outside the selected project require human review.
+These baselines remain partial until the effective version is confirmed and
+saved in Inventory. Manual dependency entries include an ecosystem field;
+choose it when different ecosystems use the same package name. After confirming
+that a detected dependency is not used, select **Exclude matching detected
+dependency from advisory scope** for that package and ecosystem. The exclusion
+remains a local human decision until an explicit inventory refresh replaces it.
+The checkbox selection is written to a private short-lived request file and
+consumed into the analysis plan; symbolic-link request paths are rejected, so large inventories do not expand into an
+oversized process command line.
+Public package release dates are reused from the project shared cache or the
+private local cache. When online release metadata is enabled, unresolved public
+package versions may be queried through deps.dev; private package identifiers
+must remain offline. Platform technologies use their release line rather than
+the date of an individual patch.
+Completed runs with any partial or failed baseline/source are archived as
+**completed-with-limitations**. If every selected baseline fails, the operation
+fails and the missing baselines remain selected for the next attempt.
 
 The **Activity** tab opens with the prominent **fAIry at work** panel. It shows
 advisory sources and local projects
@@ -542,8 +590,8 @@ modify scanned projects.
 
 **Run complete AI analysis** starts the shared security-advisory skill through
 the selected authenticated CLI. Before launch, fAIry validates configuration,
-refreshes stale inventory when confirmed, checks prerequisites, and tests source
-reachability. The agent is started from the fAIry project root so it receives
+warns about stale inventory without changing it, checks prerequisites, and
+tests source reachability. The agent is started from the fAIry project root so it receives
 the project instructions, skill, effective local configuration, inventory,
 reports, and follow-up context.
 

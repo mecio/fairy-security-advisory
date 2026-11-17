@@ -7,6 +7,38 @@ and the project intends to use [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- Run check now builds version-aware technology baselines, preselects missing
+  combinations for historical initialization, and maintains conservative
+  per-source incremental checkpoints with a configurable overlap.
+- Routed runs now require machine-validated baseline markers and a structured
+  evidence receipt before updating baseline or source checkpoint state.
+- Technology inventory now shows red, orange, and green version-evidence
+  quality independently from security severity.
+- Lockfile inventory preserves concurrent versions and reads Composer, npm,
+  Yarn, pnpm, Pipenv, Poetry, uv, Cargo, Bundler, and Go resolution data.
+- Release metadata now uses a versioned shared cache, a private local overlay,
+  optional deps.dev batch lookups, and review-only shared-cache candidate exports.
+
+### Changed
+
+- Release metadata now reads the actual deps.dev batch response, retains
+  package ecosystem identity, prioritizes verified cache entries, and bounds
+  batch and response sizes.
+
+- Inventory refresh is always explicit, creates a safety backup, replaces
+  technology/version edits, and preserves project inclusion and AI routing.
+- Initialization and incremental analyses share the daily report format and
+  filter applicability against current inventoried versions.
+- Large GUI technology selections now use a private consumed request file
+  instead of expanding every key onto the process command line, with symlink
+  rejection on both creation and consumption.
+- Hybrid checks now keep per-technology release-date baselines separate from
+  per-source incremental windows; manual versions remain unverified/orange.
+- Run summaries distinguish completed, completed-with-limitations, and failed
+  baseline coverage; unsafe or corrupt advisory state now blocks analysis.
+
 ## [0.2.0] - 2026-11-17
 
 ### Added
