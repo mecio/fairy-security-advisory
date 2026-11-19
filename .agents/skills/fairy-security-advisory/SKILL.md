@@ -72,6 +72,14 @@ Run a repeatable, evidence-based, read-only check against inventoried projects. 
 5. Check manifests and lockfiles and, when possible without mutation, installed versions. Always distinguish presence, declared version, verified installed version, and production. Never infer production from local development.
    Treat `manual_technologies` in the local inventory as user-declared scope
    hints; verify their actual use and version before claiming applicability.
+   Treat `production_technologies` as separate, environment-specific scope.
+   Preserve their evidence type, evidence note, and UTC verification time;
+   distinguish administrator confirmation and authorized checks from unverified
+   reports. Analyze every distinct inventory and production version without
+   inferring that either represents the other. Treat every populated version as
+   the applicability value regardless of its informational confidence/status;
+   a user status override is GUI-only, is excluded from the routed plan, and
+   does not change the version used for matching.
 6. If `osv-scanner` or `trivy` is available, use it read-only on relevant targets and record the command, version, and summary. If missing, run the validator and show the suggested Linux commands, making clear that execution requires review and explicit authorization; read [references/linux-tool-installation.md](references/linux-tool-installation.md) when explaining alternatives. Do not install tools or update databases/caches without an explicit request, and do not treat an automated finding as proven applicability.
 7. Evaluate actual API use, reachability, configuration, and mitigations. Classify each item as `immediate-action`, `follow-up`, `monitor`, or `not-applicable`, with risk and confidence.
 8. Review open activities in the current local follow-up and current closed-issue

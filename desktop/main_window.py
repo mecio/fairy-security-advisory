@@ -37,12 +37,15 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QProgressBar,
     QPushButton,
+    QSizePolicy,
     QSplitter,
     QStackedWidget,
+    QStyle,
     QTabWidget,
     QTableWidget,
     QTableWidgetItem,
     QTextBrowser,
+    QToolBar,
     QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
@@ -307,6 +310,7 @@ class MainWindow(QMainWindow):
         self.chat_busy_timer.setInterval(500)
         self.chat_busy_timer.timeout.connect(self._update_chat_busy)
         self.pending_issue_update: tuple[str, dict[str, str]] | None = None
+        self.assistant_custom_context: dict[str, str] | None = None
         self.current_action: str | None = None
         self.pending_selection_file: Path | None = None
         self.process_output_buffer = ""
@@ -344,7 +348,7 @@ class MainWindow(QMainWindow):
             ("Dashboard", PAGE_DASHBOARD),
             ("Reports", PAGE_REPORTS),
             ("Run check", PAGE_RUN),
-            ("AI issue assistant", PAGE_ASSISTANT),
+            ("AI assistant", PAGE_ASSISTANT),
             ("Logs", PAGE_LOGS),
             None,
             ("Inventory", PAGE_INVENTORY),
@@ -397,6 +401,23 @@ class MainWindow(QMainWindow):
         self.pages.addWidget(self._about_page())
         layout.addWidget(self.pages, 1)
         self.setCentralWidget(central)
+        self.global_toolbar = QToolBar("Global actions", self)
+        self.global_toolbar.setMovable(False)
+        self.global_toolbar.setFloatable(False)
+        self.global_toolbar.setIconSize(QSize(18, 18))
+        self.global_toolbar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
+        toolbar_spacer = QWidget()
+        toolbar_spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        self.global_toolbar.addWidget(toolbar_spacer)
+        self.global_reload_action = self.global_toolbar.addAction(
+            self.style().standardIcon(QStyle.StandardPixmap.SP_BrowserReload),
+            "Reload all views",
+        )
+        self.global_reload_action.setToolTip(
+            "Reload all local views; project paths are not rescanned"
+        )
+        self.global_reload_action.triggered.connect(self.reload_views_from_toolbar)
+        self.addToolBar(Qt.ToolBarArea.TopToolBarArea, self.global_toolbar)
         metadata = services.project_metadata()
         self.footer_identity = QLabel(
             f"Version {metadata['version']}  ·  License {metadata['license']}"
@@ -819,7 +840,7 @@ class MainWindow(QMainWindow):
     def _inventory_page(self) -> QWidget:
         page, layout = self._page(
             "Technology inventory",
-            "Choose projects and AI providers, and add technologies missed by the read-only scanner.",
+            "Choose projects and AI providers, and keep inventory and production versions distinct.",
         )
         self.inventory_tree = QTreeWidget()
         self.inventory_tree.setHeaderLabels((
@@ -838,31 +859,29 @@ class MainWindow(QMainWindow):
         self.inventory_tree.itemSelectionChanged.connect(self._update_inventory_technology_action)
         layout.addWidget(self.inventory_tree, 1)
         buttons = QHBoxLayout()
-        reload_button = QPushButton("Reload inventory view")
-        reload_button.setProperty("variant", "secondary")
-        reload_button.clicked.connect(self.load_inventory)
-        buttons.addWidget(reload_button)
-        scan = QPushButton("Refresh inventory from configured paths")
-        scan.setProperty("variant", "warning")
-        scan.clicked.connect(self.refresh_inventory)
-        buttons.addWidget(scan)
-        save_preferences = QPushButton("Save project choices")
-        save_preferences.setProperty("variant", "success")
-        save_preferences.clicked.connect(self.save_inventory_preferences)
-        buttons.addWidget(save_preferences)
-        buttons.addStretch()
-        layout.addLayout(buttons)
-        technology_actions = QHBoxLayout()
+        self.inventory_actions_layout = buttons
         self.edit_technologies_button = QPushButton("Details")
         self.edit_technologies_button.setToolTip("View and edit technologies for the selected project")
         self.edit_technologies_button.setProperty("variant", "info")
         self.edit_technologies_button.setEnabled(False)
         self.edit_technologies_button.clicked.connect(self.edit_inventory_technologies)
-        technology_actions.addWidget(self.edit_technologies_button)
-        technology_actions.addStretch()
+        buttons.addWidget(self.edit_technologies_button)
+        self.reload_inventory_paths_button = QPushButton("Reload from paths")
+        self.reload_inventory_paths_button.setToolTip(
+            "Refresh inventory from the configured project paths"
+        )
+        self.reload_inventory_paths_button.setProperty("variant", "warning")
+        self.reload_inventory_paths_button.clicked.connect(self.refresh_inventory)
+        buttons.addWidget(self.reload_inventory_paths_button)
+        self.save_inventory_button = QPushButton("Save")
+        self.save_inventory_button.setToolTip("Save project check and preferred AI choices")
+        self.save_inventory_button.setProperty("variant", "success")
+        self.save_inventory_button.clicked.connect(self.save_inventory_preferences)
+        buttons.addWidget(self.save_inventory_button)
+        buttons.addStretch()
         self.inventory_count = QLabel()
-        technology_actions.addWidget(self.inventory_count)
-        layout.addLayout(technology_actions)
+        buttons.addWidget(self.inventory_count)
+        layout.addLayout(buttons)
         return page
 
     def _reports_page(self) -> QWidget:
@@ -974,11 +993,11 @@ class MainWindow(QMainWindow):
 
     def _assistant_page(self) -> QWidget:
         page, layout = self._page(
-            "AI issue assistant",
-            "Discuss one follow-up activity at a time. Advice is read-only; proposed status changes require explicit confirmation.",
+            "AI assistant",
+            "Investigate a technology version or discuss one follow-up activity. AI advice is read-only.",
         )
         controls = QHBoxLayout()
-        controls.addWidget(QLabel("Open issue"))
+        controls.addWidget(QLabel("Context"))
         self.assistant_issue_combo = QComboBox()
         self.assistant_issue_combo.setMinimumWidth(360)
         self.assistant_issue_combo.currentIndexChanged.connect(self.load_assistant_conversation)
@@ -1050,6 +1069,7 @@ class MainWindow(QMainWindow):
         layout.addLayout(busy)
 
         quick = QHBoxLayout()
+        self.assistant_issue_quick_buttons: list[QPushButton] = []
         for label, prompt in (
             ("Ask for advice", "What should we verify or do next for this issue?"),
             ("Taken in charge", "This issue has been taken in charge by [owner]. The next action is [action]."),
@@ -1061,6 +1081,7 @@ class MainWindow(QMainWindow):
             button.clicked.connect(
                 lambda _checked=False, text=prompt: self._set_assistant_prompt(text)
             )
+            self.assistant_issue_quick_buttons.append(button)
             quick.addWidget(button)
         quick.addStretch()
         layout.addLayout(quick)
@@ -1087,7 +1108,7 @@ class MainWindow(QMainWindow):
         self.assistant_apply_button.clicked.connect(self.apply_assistant_update)
         actions.addWidget(self.assistant_apply_button)
         actions.addStretch()
-        privacy = QLabel("Issue context is sent to the selected AI; chat history stays under ignored output/.")
+        privacy = QLabel("Selected context is sent to the AI; chat history stays under ignored output/.")
         privacy.setStyleSheet("color:#7890a8;")
         actions.addWidget(privacy)
         layout.addLayout(actions)
@@ -1132,16 +1153,17 @@ class MainWindow(QMainWindow):
         scope_label.setStyleSheet("color:#9fb8cc; padding:4px 0;")
         self.technology_scan_tree = QTreeWidget()
         self.technology_scan_tree.setHeaderLabels((
-            "Scan", "Technology", "Version", "Inventory quality", "Baseline", "Projects",
+            "Scan", "Technology", "Version", "Context", "Evidence quality", "Baseline",
+            "Projects",
         ))
         self.technology_scan_tree.setRootIsDecorated(False)
         self.technology_scan_tree.setAlternatingRowColors(True)
-        for column in (0, 2, 3, 4):
+        for column in (0, 2, 3, 4, 5):
             self.technology_scan_tree.header().setSectionResizeMode(
                 column, QHeaderView.ResizeMode.ResizeToContents,
             )
         self.technology_scan_tree.header().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        self.technology_scan_tree.header().setSectionResizeMode(5, QHeaderView.ResizeMode.Stretch)
+        self.technology_scan_tree.header().setSectionResizeMode(6, QHeaderView.ResizeMode.Stretch)
 
         buttons = QHBoxLayout()
         prerequisites = QPushButton("Check prerequisites")
@@ -1159,10 +1181,24 @@ class MainWindow(QMainWindow):
         self.prepublish_button.clicked.connect(lambda: self.start_action("prepublish"))
         self.prepublish_button.setVisible(self.developer_tools_active)
         buttons.addWidget(self.prepublish_button)
-        run = QPushButton("Run complete AI analysis")
-        run.setProperty("variant", "ai")
-        run.clicked.connect(self.run_ai_analysis)
-        buttons.addWidget(run)
+        self.scan_selected_button = QPushButton("Scan selected technologies")
+        self.scan_selected_button.setProperty("variant", "ai")
+        self.scan_selected_button.setToolTip(
+            "Run the incremental check and historical baselines for checked technologies"
+        )
+        self.scan_selected_button.clicked.connect(
+            lambda: self.run_ai_analysis(scan_all=False)
+        )
+        buttons.addWidget(self.scan_selected_button)
+        self.scan_all_button = QPushButton("Scan all technologies")
+        self.scan_all_button.setProperty("variant", "ai")
+        self.scan_all_button.setToolTip(
+            "Run the incremental check and historical baselines for every listed technology"
+        )
+        self.scan_all_button.clicked.connect(
+            lambda: self.run_ai_analysis(scan_all=True)
+        )
+        buttons.addWidget(self.scan_all_button)
         self.stop_button = QPushButton("Stop")
         self.stop_button.setProperty("variant", "danger")
         self.stop_button.setEnabled(False)
@@ -1414,7 +1450,8 @@ class MainWindow(QMainWindow):
             "technology-inventory": "Technology inventory",
             "reports-and-follow-up": "Reports and follow-up",
             "analysis-logs": "Analysis logs",
-            "ai-issue-assistant": "AI issue assistant",
+            "ai-assistant": "AI assistant",
+            "ai-issue-assistant": "AI assistant",
             "running-security-checks": "Running security checks",
             "system-status-and-ai-authentication": "System status and AI authentication",
             "configuration-backups": "Configuration backups",
@@ -1435,22 +1472,13 @@ class MainWindow(QMainWindow):
         self.guide_viewer.ensureCursorVisible()
         self.guide_search_status.setText(f"Opened section “{title}”.")
 
-    def refresh_all(self) -> None:
+    def reload_views(self) -> None:
+        """Reload dynamic local data without rescanning configured project paths."""
         self.load_inventory()
         self.load_initialization_scope()
         self.load_reports()
         self.load_analysis_logs()
         self.load_status()
-        default_profile, profiles, default_mode, modes = services.ai_options()
-        self.profile_combo.clear()
-        self.profile_combo.addItems(profiles)
-        self.profile_combo.setCurrentText(default_profile)
-        self.assistant_profile_combo.clear()
-        self.assistant_profile_combo.addItems(profiles)
-        self.assistant_profile_combo.setCurrentText(default_profile)
-        self.mode_combo.clear()
-        self.mode_combo.addItems(modes)
-        self.mode_combo.setCurrentText(default_mode)
         statistics = services.security_statistics()
         self.dashboard_metrics["open"].setText(str(statistics["open"]))
         self.dashboard_metrics["today"].setText(str(statistics["today"]))
@@ -1469,6 +1497,26 @@ class MainWindow(QMainWindow):
             f"Last modified year: {metadata['last_modified_year']}\n"
             f"License: {metadata['license']}"
         )
+
+    def reload_views_from_toolbar(self) -> None:
+        self.reload_views()
+        self.statusBar().showMessage(
+            "Local views reloaded; configured project paths were not rescanned",
+            5000,
+        )
+
+    def refresh_all(self) -> None:
+        self.reload_views()
+        default_profile, profiles, default_mode, modes = services.ai_options()
+        self.profile_combo.clear()
+        self.profile_combo.addItems(profiles)
+        self.profile_combo.setCurrentText(default_profile)
+        self.assistant_profile_combo.clear()
+        self.assistant_profile_combo.addItems(profiles)
+        self.assistant_profile_combo.setCurrentText(default_profile)
+        self.mode_combo.clear()
+        self.mode_combo.addItems(modes)
+        self.mode_combo.setCurrentText(default_mode)
 
     def load_configuration(self) -> None:
         for path, editor in self.config_editors.items():
@@ -1678,14 +1726,29 @@ class MainWindow(QMainWindow):
         try:
             rows = services.initialization_scan_rows()
         except services.ConfigurationError as error:
-            item = QTreeWidgetItem(("", "Advisory state unavailable", "—", "Missing", "Blocked", str(error)))
-            item.setForeground(3, QColor("#df6f6f"))
+            item = QTreeWidgetItem((
+                "", "Advisory state unavailable", "—", "—", "Missing", "Blocked", str(error),
+            ))
             item.setForeground(4, QColor("#df6f6f"))
+            item.setForeground(5, QColor("#df6f6f"))
             self.technology_scan_tree.addTopLevelItem(item)
             return
         for row in rows:
+            deployments = row.get("production_deployments", [])
+            environments = sorted({
+                str(item.get("environment")) for item in deployments
+                if isinstance(item, dict) and item.get("environment")
+            }, key=str.casefold)
+            inventory_present = bool(row.get("inventory_projects"))
+            if environments and inventory_present:
+                context = "Inventory + production: " + ", ".join(environments)
+            elif environments:
+                context = "Production: " + ", ".join(environments)
+            else:
+                context = "Inventory"
             item = QTreeWidgetItem((
                 "", row["name"], row.get("version") or "—",
+                context,
                 quality_labels.get(row["quality"], row["quality"]),
                 row["baseline_status"].replace("-", " ").title(),
                 ", ".join(row["projects"]),
@@ -1698,9 +1761,9 @@ class MainWindow(QMainWindow):
             color = quality_colors.get(row["quality"])
             if color:
                 item.setForeground(2, color)
-                item.setForeground(3, color)
+                item.setForeground(4, color)
             item.setToolTip(
-                3, "Version evidence quality only; this is not a vulnerability status."
+                4, "Version evidence quality only; this is not a vulnerability status."
             )
             self.technology_scan_tree.addTopLevelItem(item)
 
@@ -1726,19 +1789,26 @@ class MainWindow(QMainWindow):
         except ValueError as error:
             QMessageBox.critical(self, "Invalid manual technologies", str(error))
             return
-        if dialog.exec() != QDialog.DialogCode.Accepted:
+        result = dialog.exec()
+        if result != QDialog.DialogCode.Accepted:
             return
         try:
-            updated = services.update_manual_technologies(path, dialog.manual)
+            updated = services.update_project_technologies(
+                path, dialog.manual, dialog.production,
+            )
         except (OSError, ValueError, services.ConfigurationError) as error:
             QMessageBox.critical(self, "Unable to save technologies", str(error))
             return
         self.load_inventory()
         self.load_initialization_scope()
+        if dialog.ai_version_request is not None:
+            self.open_technology_version_ai(updated, dialog.ai_version_request)
+            return
         QMessageBox.information(
             self, "Technologies saved",
-            "Technology overrides were saved in ignored local configuration. A future explicit "
-            "inventory refresh will replace them after warning and confirmation.",
+            "Inventory overrides and production evidence were saved in ignored local "
+            "configuration. A future explicit inventory refresh replaces inventory overrides "
+            "but preserves production versions.",
         )
 
     def update_inventory_count(self, _item: QTreeWidgetItem | None = None, _column: int = 0) -> None:
@@ -1777,8 +1847,9 @@ class MainWindow(QMainWindow):
             self, "Refresh inventory",
             "Scan the configured project roots and replace detected technologies, versions, "
             "and manual technology edits?\n\nProject Check and Preferred AI choices will be "
-            "preserved. A private configuration backup, including the current inventory, "
-            "will be created before replacement.",
+            "preserved. Separately evidenced production versions will also be preserved. "
+            "A private configuration backup, including the current inventory, will be "
+            "created before replacement.",
         ) == QMessageBox.StandardButton.Yes:
             self.start_action("refresh", assume_yes=True)
 
@@ -2106,11 +2177,35 @@ class MainWindow(QMainWindow):
             self, "Issue not open", f"Activity {issue_id} is not available among open follow-ups.",
         )
 
+    def open_technology_version_ai(
+        self, project: dict[str, object], technology: dict[str, object],
+    ) -> None:
+        context = services.technology_version_assistant_context(project, technology)
+        self.assistant_custom_context = context
+        self._navigate_to_page(PAGE_ASSISTANT)
+        for index in range(self.assistant_issue_combo.count()):
+            candidate = self.assistant_issue_combo.itemData(index, Qt.ItemDataRole.UserRole)
+            if isinstance(candidate, dict) and candidate.get("ID") == context["ID"]:
+                self.assistant_issue_combo.setCurrentIndex(index)
+                break
+        self._set_assistant_prompt(services.technology_version_assistant_prompt(context))
+        self.statusBar().showMessage(
+            f"AI version research prepared for {context['Technology']}; review and send the prompt",
+            8000,
+        )
+
     def load_assistant_issues(self) -> None:
         current = self.assistant_issue_combo.currentData(Qt.ItemDataRole.UserRole)
         current_id = current.get("ID") if isinstance(current, dict) else None
         self.assistant_issue_combo.blockSignals(True)
         self.assistant_issue_combo.clear()
+        if self.assistant_custom_context is not None:
+            context = self.assistant_custom_context
+            self.assistant_issue_combo.addItem(
+                f"{context['Project']}  |  Find version  |  {context['Technology']}", context,
+            )
+            if context.get("ID") == current_id:
+                self.assistant_issue_combo.setCurrentIndex(0)
         for issue in services.open_followup_activities():
             label = (
                 f"{issue.get('Project', 'unknown')}  |  {issue.get('ID', 'unknown')}  |  "
@@ -2143,32 +2238,48 @@ class MainWindow(QMainWindow):
         project = str(issue.get("Project") or "Unknown project")
         self.assistant_project_label.setText(project)
         self.assistant_project_label.setToolTip(project)
-        priority = html.escape(str(issue.get("Priority") or "Unknown"))
-        priority_color = {
-            "critical": "#df7f7f", "high": "#e5bb62", "medium": "#9fd3e5",
-            "low": "#8fd3a4",
-        }.get(priority.casefold(), "#c9dded")
-        issue_title_html = (
-            f'<span style="color:#7890a8;">ISSUE</span> '
-            f'<b>{html.escape(str(issue["Issue title"]))}</b><br>'
-            if issue.get("Issue title") else ""
-        )
-        self.assistant_issue_details.setText(
-            f'<span style="color:#7890a8;">ACTIVITY</span> '
-            f'<b>{html.escape(str(issue.get("ID") or "Unknown"))}</b><br>'
-            f'{issue_title_html}'
-            f'<span style="color:#7890a8;">ADVISORY</span> '
-            f'<b>{html.escape(str(issue.get("Advisory / CVE") or "Unknown"))}</b><br>'
-            f'<span style="color:{priority_color};"><b>{priority}</b></span> priority &nbsp;·&nbsp; '
-            f'{html.escape(str(issue.get("Status") or "Unknown"))} &nbsp;·&nbsp; '
-            f'Owner: {html.escape(str(issue.get("Owner") or "Unassigned"))}<br>'
-            f'<span style="color:#7890a8;">NEXT</span> '
-            f'{html.escape(str(issue.get("Next action") or "Not specified"))}'
-        )
+        technology_context = issue.get("Context type") == "technology-version"
+        for button in self.assistant_issue_quick_buttons:
+            button.setVisible(not technology_context)
+        self.assistant_apply_button.setVisible(not technology_context)
+        if technology_context:
+            self.assistant_issue_details.setText(
+                f'<span style="color:#7890a8;">TECHNOLOGY</span> '
+                f'<b>{html.escape(str(issue.get("Technology") or "Unknown"))}</b><br>'
+                f'<span style="color:#7890a8;">CATEGORY</span> '
+                f'{html.escape(str(issue.get("Category") or "Other"))}<br>'
+                f'<span style="color:#7890a8;">ECOSYSTEM</span> '
+                f'{html.escape(str(issue.get("Ecosystem") or "Not specified"))}<br>'
+                f'<span style="color:#df7f7f;"><b>VERSION MISSING</b></span> &nbsp;·&nbsp; '
+                f'Source: {html.escape(str(issue.get("Inventory source") or "Unknown"))}'
+            )
+        else:
+            priority = html.escape(str(issue.get("Priority") or "Unknown"))
+            priority_color = {
+                "critical": "#df7f7f", "high": "#e5bb62", "medium": "#9fd3e5",
+                "low": "#8fd3a4",
+            }.get(priority.casefold(), "#c9dded")
+            issue_title_html = (
+                f'<span style="color:#7890a8;">ISSUE</span> '
+                f'<b>{html.escape(str(issue["Issue title"]))}</b><br>'
+                if issue.get("Issue title") else ""
+            )
+            self.assistant_issue_details.setText(
+                f'<span style="color:#7890a8;">ACTIVITY</span> '
+                f'<b>{html.escape(str(issue.get("ID") or "Unknown"))}</b><br>'
+                f'{issue_title_html}'
+                f'<span style="color:#7890a8;">ADVISORY</span> '
+                f'<b>{html.escape(str(issue.get("Advisory / CVE") or "Unknown"))}</b><br>'
+                f'<span style="color:{priority_color};"><b>{priority}</b></span> priority &nbsp;·&nbsp; '
+                f'{html.escape(str(issue.get("Status") or "Unknown"))} &nbsp;·&nbsp; '
+                f'Owner: {html.escape(str(issue.get("Owner") or "Unassigned"))}<br>'
+                f'<span style="color:#7890a8;">NEXT</span> '
+                f'{html.escape(str(issue.get("Next action") or "Not specified"))}'
+            )
         entries = services.assistant_history(issue.get("ID", "general"))
         if not entries:
             self.assistant_conversation.setHtml(
-                "<p style='color:#7890a8'><i>No local conversation for this issue yet.</i></p>"
+                "<p style='color:#7890a8'><i>No local conversation for this context yet.</i></p>"
             )
             return
         blocks = []
@@ -2267,7 +2378,7 @@ class MainWindow(QMainWindow):
         issue = self.selected_assistant_issue()
         message = self.assistant_input.toPlainText().strip()
         if not issue:
-            QMessageBox.warning(self, "No open issue", "Select an open follow-up activity first.")
+            QMessageBox.warning(self, "No context", "Select an assistant context first.")
             return
         if not message:
             QMessageBox.warning(self, "Empty message", "Write a question or issue update first.")
@@ -2317,6 +2428,7 @@ class MainWindow(QMainWindow):
         self.load_assistant_conversation()
         self.assistant_send_button.setEnabled(False)
         self.chat_process.setProperty("issue_id", issue_id)
+        self.chat_process.setProperty("context_type", issue.get("Context type", "follow-up"))
         self.chat_process.start(command[0], command[1:])
         self.chat_process.closeWriteChannel()
 
@@ -2352,6 +2464,8 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("AI assistant failed", 8000)
             return
         visible, proposal = services.extract_issue_update(self.chat_response)
+        if self.chat_process.property("context_type") == "technology-version":
+            proposal = None
         if not visible:
             visible = "The AI returned no explanatory text."
         try:
@@ -2723,10 +2837,24 @@ class MainWindow(QMainWindow):
             return
         self.close()
 
-    def run_ai_analysis(self) -> None:
+    def run_ai_analysis(self, *, scan_all: bool = False) -> None:
         provider = self.provider_combo.currentText()
         profile = self.profile_combo.currentText()
         mode = self.mode_combo.currentText()
+        all_technology_keys = [
+            str(self.technology_scan_tree.topLevelItem(index).data(
+                0, Qt.ItemDataRole.UserRole,
+            ))
+            for index in range(self.technology_scan_tree.topLevelItemCount())
+        ]
+        technology_keys = all_technology_keys if scan_all else [
+            str(self.technology_scan_tree.topLevelItem(index).data(
+                0, Qt.ItemDataRole.UserRole,
+            ))
+            for index in range(self.technology_scan_tree.topLevelItemCount())
+            if self.technology_scan_tree.topLevelItem(index).checkState(0)
+            == Qt.CheckState.Checked
+        ]
         try:
             routing = services.analysis_routing(provider)
             models = {
@@ -2761,22 +2889,24 @@ class MainWindow(QMainWindow):
         model_summary = ", ".join(
             f"{name}: {models[name]}" for name in routing["required_providers"]
         )
+        baseline_summary = (
+            f"all {len(all_technology_keys)} listed technologies"
+            if scan_all else
+            f"{len(technology_keys)} checked of {len(all_technology_keys)} listed technologies"
+        )
         if QMessageBox.question(
             self, "Start AI analysis",
             f"Start routed analysis with {provider} as coordinator, profile {profile}, "
             f"and {mode} mode?\n\n"
             f"Projects — {routing['summary']}\n"
             f"Models — {model_summary}\n\n"
+            f"Historical baseline scan — {baseline_summary}.\n"
+            "Incremental checking still covers the complete active technology scope.\n\n"
             "Projects with '-' use the coordinator. Preferred Codex/Claude projects "
             "use that provider.\n\n"
             "The agent may access the network and update ignored local output files.",
         ) != QMessageBox.StandardButton.Yes:
             return
-        technology_keys = [
-            str(self.technology_scan_tree.topLevelItem(index).data(0, Qt.ItemDataRole.UserRole))
-            for index in range(self.technology_scan_tree.topLevelItemCount())
-            if self.technology_scan_tree.topLevelItem(index).checkState(0) == Qt.CheckState.Checked
-        ]
         try:
             technology_selection_file = services.write_technology_selection(technology_keys)
         except (OSError, services.ConfigurationError) as error:

@@ -37,6 +37,122 @@ class TechnologyStateTest(unittest.TestCase):
         self.assertEqual(version_quality("^8.3"), "orange")
         self.assertEqual(version_quality(""), "red")
         self.assertEqual(version_quality("latest"), "red")
+        self.assertEqual(
+            version_quality("16.4", "production-administrator-confirmed"), "green",
+        )
+        self.assertEqual(
+            version_quality("16.4", "production-reported-unverified"), "orange",
+        )
+        self.assertEqual(version_quality("16.4", "manual", "confirmed"), "green")
+        self.assertEqual(version_quality("16.4", "verified-local", "hypothetical"), "orange")
+
+    def test_user_version_status_does_not_change_advisory_version(self) -> None:
+        base = {
+            "id": "api",
+            "manual_technologies": [{
+                "category": "databases", "name": "PostgreSQL", "version": "17.2",
+                "version_status": "hypothetical",
+            }],
+        }
+        hypothetical = collect_technology_scope({"inventory": {"projects": [base]}})[0]
+        base["manual_technologies"][0]["version_status"] = "confirmed"
+        confirmed = collect_technology_scope({"inventory": {"projects": [base]}})[0]
+
+        self.assertEqual(hypothetical["version"], "17.2")
+        self.assertEqual(confirmed["version"], "17.2")
+        self.assertEqual(hypothetical["key"], confirmed["key"])
+        self.assertEqual((hypothetical["quality"], confirmed["quality"]), ("orange", "orange"))
+        self.assertNotIn("version_status", hypothetical)
+        self.assertNotIn("version_status", confirmed)
+
+        for scoped in (hypothetical, confirmed):
+            state = {"schema_version": 1, "baselines": {}, "sources": {}}
+            record_completed_baselines(
+                state, [scoped], {scoped["key"]: "completed"},
+                dt.datetime(2026, 11, 19, tzinfo=dt.timezone.utc),
+            )
+            self.assertEqual(state["baselines"][scoped["key"]]["status"], "completed")
+
+        displayed = project_technology_records(base)[0]
+        self.assertEqual(displayed["version_status"], "confirmed")
+        self.assertEqual(displayed["quality"], "green")
+
+    def test_production_versions_are_separate_advisory_scope_with_environments(self) -> None:
+        config = {"inventory": {"projects": [{
+            "id": "api",
+            "technology_inventory": [{
+                "category": "databases", "name": "PostgreSQL", "version": "17.2",
+                "source": "verified-local",
+            }],
+            "production_technologies": [
+                {"category": "databases", "name": "PostgreSQL",
+                 "environment": "production-eu", "version": "16.4",
+                 "evidence_type": "administrator-confirmed", "evidence": "Admin evidence",
+                 "verified_at": "2026-11-19T10:30:00Z"},
+                {"category": "databases", "name": "PostgreSQL",
+                 "environment": "production-us", "version": "17.2",
+                 "evidence_type": "authorized-check", "evidence": "Read-only check",
+                 "verified_at": "2026-11-19T10:35:00Z"},
+            ],
+        }]}}
+        scope = collect_technology_scope(config)
+        self.assertEqual({item["version"] for item in scope}, {"16.4", "17.2"})
+        by_version = {item["version"]: item for item in scope}
+        self.assertEqual(
+            by_version["16.4"]["production_deployments"][0]["environment"],
+            "production-eu",
+        )
+        self.assertEqual(by_version["16.4"]["quality"], "green")
+        self.assertEqual(by_version["17.2"]["inventory_projects"], ["api"])
+        self.assertEqual(
+            by_version["17.2"]["production_deployments"][0]["environment"],
+            "production-us",
+        )
+
+    def test_aggregate_scope_keeps_production_metadata_only_per_deployment(self) -> None:
+        config = {"inventory": {"projects": [{
+            "id": "api",
+            "production_technologies": [
+                {"category": "databases", "name": "PostgreSQL",
+                 "environment": "production-eu", "version": "16.4",
+                 "evidence_type": "reported-unverified", "evidence": "Operator report",
+                 "verified_at": "2026-11-19T10:30:00Z"},
+                {"category": "databases", "name": "PostgreSQL",
+                 "environment": "production-us", "version": "16.4",
+                 "evidence_type": "administrator-confirmed", "evidence": "Admin evidence",
+                 "verified_at": "2026-11-19T10:35:00Z"},
+            ],
+        }]}}
+
+        scope = collect_technology_scope(config)[0]
+        self.assertEqual(scope["version"], "16.4")
+        self.assertEqual(scope["quality"], "green")
+        self.assertEqual(len(scope["production_deployments"]), 2)
+        for singular in ("environment", "evidence_type", "evidence", "verified_at"):
+            self.assertNotIn(singular, scope)
+
+    def test_production_scope_survives_a_local_dependency_exclusion(self) -> None:
+        config = {"inventory": {"projects": [{
+            "id": "api",
+            "technology_inventory": [{
+                "category": "dependencies", "ecosystem": "npm",
+                "name": "legacy-package", "version": "1.0.0",
+            }],
+            "manual_technologies": [{
+                "category": "dependencies", "ecosystem": "npm",
+                "name": "legacy-package", "exclude": True,
+            }],
+            "production_technologies": [{
+                "category": "dependencies", "ecosystem": "npm",
+                "name": "legacy-package", "environment": "production",
+                "version": "0.9.0", "evidence_type": "administrator-confirmed",
+                "evidence": "Legacy deployment confirmed", "verified_at": "2026-11-19T10:30:00Z",
+            }],
+        }]}}
+        scope = collect_technology_scope(config)
+        self.assertEqual([(item["version"], item["source"]) for item in scope], [
+            ("0.9.0", "production-administrator-confirmed"),
+        ])
 
     def test_manual_value_overrides_matching_detected_technology(self) -> None:
         records = project_technology_records({

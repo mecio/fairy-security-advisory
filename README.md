@@ -133,7 +133,7 @@ output are handled and stored only by the provider CLI; fAIry records none of
 them and displays only the boolean authenticated/not-authenticated state.
 
 The requirements check verifies both command availability and authentication
-before allowing the analysis service or AI issue assistant to start. On Linux
+before allowing the analysis service or AI assistant to start. On Linux
 it also runs a harmless, read-only `bwrap` namespace probe. When Ubuntu's
 AppArmor user-namespace restriction blocks the probe, fAIry checks the Linux
 distribution before offering a repair. On Ubuntu 24.04 it proposes Ubuntu's
@@ -202,7 +202,7 @@ The desktop application provides:
   searchable issue titles, advisory/CVE identifiers, and primary-source links;
 - a local year/month analysis-log archive with summary, event, routing, AI
   output, evidence viewing, and confirmed per-run deletion;
-- an AI issue assistant linked to one open follow-up ID and project at a time;
+- an AI assistant for missing-version research and one open follow-up at a time;
 - system and optional-tool status;
 - a Linux sandbox preflight with guided `bubblewrap`, `socat`, and AppArmor
   configuration for Codex and Claude Code;
@@ -224,10 +224,16 @@ The sidebar **User guide** opens the versioned
 **Next**/**Previous** to highlight and jump to each occurrence; searches wrap
 at the beginning or end. **Back to top** returns to the contents section.
 
-#### AI issue assistant
+#### AI assistant
 
-The desktop **AI issue assistant** page supports operational conversations
-about an existing open follow-up. Select an issue before asking for advice,
+The desktop **AI assistant** page supports guided, read-only research for a
+technology whose version is missing, as well as operational conversations
+about an existing open follow-up. From a project's technology details, select
+a versionless row and choose **Find inventory version with AI** to open a prefilled,
+editable research prompt. The AI does not save a discovered version; the user
+must review the evidence and enter it through the technology editor.
+
+For follow-up work, select an issue before asking for advice,
 reporting ownership, recording remediation evidence, or explaining why an
 advisory is not applicable. The selected ID, issue title, project, CVE/advisory, priority,
 owner, status, and next action are provided as context to the chosen Codex or
@@ -352,15 +358,34 @@ Each project occupies one inventory row with a technology summary. Select a
 project and use **Details** to add a
 technology with its category, optional version, and context. The dialog has
 an **Inventory technologies** tab for the table and an **Add / edit technology**
-tab for the form. Select a row and click **Edit selected**, or double-click it,
-to load its values in the form. Apply the change, then save the dialog. fAIry marks the correction as
+tab for the form, plus separate **Production versions** and **Add / edit
+production** tabs. Select a row and click **Edit selected**, or double-click it,
+to load its values in the form. A row without a version also enables **Find
+inventory version with AI**, which opens the assistant with an editable read-only research
+prompt. When Inventory or Production edits are pending, fAIry asks whether to
+save them before navigation; declining keeps the dialog and its changes open.
+After saving, the assistant opens only if the selected technology still has no
+version. Apply the researched version in a new Details session;
+fAIry marks the correction as
 manual and uses the saved value as the current inventory override. Inventory
 quality is shown as red for a missing version, orange for a declared, constrained,
 manual, or otherwise uncertain version, and green only for an exact lockfile-resolved
-or locally verified version; these colors do not indicate
-vulnerability status. An explicit inventory refresh warns that it
+or locally verified version. This status is informational and can be overridden
+by the user; every populated version is used unchanged for advisory matching
+regardless of status. The override remains in the inventory GUI and is not sent
+in the advisory plan to the AI. Production records support multiple environments
+and keep the version, evidence type, evidence note, and UTC verification time
+separate from the inventory version. When a production record is added, its
+version initially copies the selected inventory version; until an explicit
+environment record is saved, the Production version column continues to follow
+the scanned Inventory version as an unverified default. The user can override
+that default manually. It does not become verified production evidence without
+the required evidence details. Administrator-confirmed and authorized
+checks are treated as verified production evidence; reported-only values remain
+uncertain. These colors do not indicate vulnerability status. Every distinct
+inventory and production version is included in advisory scope. An explicit inventory refresh warns that it
 will replace technology/version edits, creates a private configuration backup,
-and preserves only project inclusion and Preferred AI choices.
+and preserves project inclusion, Preferred AI choices, and production evidence.
 
 Supported advisory source types are `html`, `rss`, `atom`, `json`, `api`, and
 `repository`. Each source declares its name, URL, category or filter,
@@ -605,7 +630,9 @@ stale inventory is reported but never refreshed implicitly.
 Run check lists canonical technology/version combinations across selected
 projects. Combinations without a baseline are preselected for a historical
 initialization scan; already covered combinations remain available for a manual
-rescan. A hybrid run resolves each selected version's official release date and
+rescan. **Scan selected technologies** uses the checked rows for historical
+baselines, while **Scan all technologies** uses every listed row. Both retain
+incremental checking over the complete active scope. A hybrid run resolves each selected version's official release date and
 searches its baseline from that date through today, while retaining the
 per-source incremental window for technologies already initialized. Initialization and incremental runs append to the same daily report,
 with initialization sections labeled explicitly. Successful sources receive

@@ -106,13 +106,25 @@ directly affect web-server code.
 Per-project `manual_technologies` in local inventory are user-declared scope
 hints, not scanner findings or verified installed and production versions. Use
 them to look for relevant advisories, then verify applicability independently.
+Per-project `production_technologies` are environment-specific records kept
+separate from detected or manual inventory versions. Each production record
+must retain its evidence type, evidence note, and UTC verification timestamp.
+Treat administrator-confirmed and explicitly authorized checks as production
+evidence; label reported-only values as unverified. Include every distinct
+inventory and production version in advisory scope, preserve production records
+during inventory refreshes, and never infer production from local evidence.
 An explicit ecosystem-scoped manual exclusion records a human decision that a
 detected dependency is not used in that project; do not restore it to the active
 scope without new evidence or a user-requested inventory refresh.
 The inventory UI may mark version evidence as red (missing), orange (uncertain,
-constrained, or manually supplied), or green (exact and resolved from a lockfile
-or verified locally). These colors describe inventory
-quality only, never vulnerability or production status.
+constrained, manually supplied, or production-reported only), or green (exact
+and resolved from a lockfile, verified locally, administrator-confirmed in
+production, or verified through an authorized production check). These colors describe inventory
+quality only, never vulnerability or production status. Whenever a version value
+is present, use that value as the advisory applicability boundary regardless of
+its displayed confidence. The user may override the displayed inventory-version
+status; that assessment remains GUI-only, is excluded from advisory plans, and
+never changes the saved version.
 
 The detected project inventory is environment-derived data and belongs only in
 the ignored `config/local/projects.yaml`. Never copy local project names,

@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 from scripts.inventory import (
     analyze_project, build_inventory, discover_projects, iter_project_files, matches_exclude,
-    normalize_manual_technologies,
+    normalize_manual_technologies, normalize_production_technologies,
 )
 
 
@@ -237,6 +237,13 @@ class ProjectRootExclusionsTest(unittest.TestCase):
                             "name": "PostgreSQL", "category": "databases",
                             "note": "User-declared database",
                         }],
+                        "production_technologies": [{
+                            "name": "PostgreSQL", "category": "databases",
+                            "environment": "production-eu", "version": "16.4",
+                            "evidence_type": "administrator-confirmed",
+                            "evidence": "Confirmed by the system administrator",
+                            "verified_at": "2026-11-19T10:30:00Z",
+                        }],
                     }],
                 },
             }
@@ -258,6 +265,31 @@ class ProjectRootExclusionsTest(unittest.TestCase):
             })
             self.assertEqual(by_id["existing"]["manual_technologies"], [])
             self.assertEqual(by_id["new"]["manual_technologies"], [])
+            self.assertEqual(
+                by_id["existing"]["production_technologies"][0]["version"], "16.4",
+            )
+            self.assertEqual(by_id["new"]["production_technologies"], [])
+
+    def test_production_technologies_require_evidence_and_support_environments(self) -> None:
+        values = normalize_production_technologies([
+            {"name": "PostgreSQL", "category": "databases",
+             "environment": "production-eu", "version": "16.4",
+             "evidence_type": "administrator-confirmed",
+             "evidence": "Confirmed by system administrator",
+             "verified_at": "2026-11-19T11:30:00+01:00"},
+            {"name": "PostgreSQL", "category": "databases",
+             "environment": "production-us", "version": "16.6",
+             "evidence_type": "authorized-check", "evidence": "Read-only version command",
+             "verified_at": "2026-11-19T10:35:00Z"},
+        ])
+        self.assertEqual([item["environment"] for item in values], [
+            "production-eu", "production-us",
+        ])
+        self.assertEqual(values[0]["verified_at"], "2026-11-19T10:30:00Z")
+        with self.assertRaisesRegex(ValueError, "duplicate production environment"):
+            normalize_production_technologies([values[0], {**values[0], "version": "16.5"}])
+        with self.assertRaisesRegex(ValueError, "needs evidence"):
+            normalize_production_technologies([{**values[0], "evidence": ""}])
 
     def test_manual_technologies_reject_duplicates_and_control_characters(self) -> None:
         with self.assertRaises(ValueError):
@@ -289,6 +321,17 @@ class ProjectRootExclusionsTest(unittest.TestCase):
              "version": "1.1.0", "replaces_version": "1.0.0"},
         ])
         self.assertEqual(targeted[0]["replaces_version"], "1.0.0")
+
+        assessed = normalize_manual_technologies([{
+            "name": "PostgreSQL", "category": "databases", "version": "17.2",
+            "version_status": "hypothetical",
+        }])
+        self.assertEqual(assessed[0]["version_status"], "hypothetical")
+        with self.assertRaisesRegex(ValueError, "unsupported version status"):
+            normalize_manual_technologies([{
+                "name": "PostgreSQL", "category": "databases", "version": "17.2",
+                "version_status": "trusted-by-magic",
+            }])
         with self.assertRaisesRegex(ValueError, "both excluded and versioned"):
             normalize_manual_technologies([
                 {"name": "example.test/old", "category": "dependencies",

@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
 import json
 import os
 import re
@@ -31,10 +32,10 @@ from scripts.config_backup import (
 )
 from scripts.ai_usage import codex_rate_limits, summarize_usage
 from scripts.analysis_plan import build_analysis_plan, plan_summary, required_providers
-from scripts.inventory import normalize_manual_technologies
+from scripts.inventory import normalize_manual_technologies, normalize_production_technologies
 from scripts.technology_state import (
-    ambiguous_manual_dependencies, load_state_for_run, project_technology_records,
-    scan_rows, StateError,
+    ambiguous_manual_dependencies, load_state_for_run, production_technology_records,
+    project_technology_records, scan_rows, StateError,
 )
 from scripts.desktop_integration import (
     desktop_entry_installed, install_linux_desktop_entry, integration_paths,
@@ -282,11 +283,19 @@ def update_manual_technologies(
     project_path: str, values: list[dict[str, str]],
 ) -> dict[str, Any]:
     """Save user-declared technology context only in the ignored inventory."""
+    return update_project_technologies(project_path, values, None)
+
+
+def update_project_technologies(
+    project_path: str, manual_values: list[dict[str, str]],
+    production_values: list[dict[str, str]] | None,
+) -> dict[str, Any]:
+    """Atomically save inventory overrides and environment-specific production evidence."""
     config_path = effective_config_path(CONFIG_DIR, "projects.example.yaml")
     if config_path == EXAMPLE_CONFIG:
         raise ConfigurationError("Initialize local configuration before editing technologies.")
     try:
-        manual = normalize_manual_technologies(values)
+        manual = normalize_manual_technologies(manual_values)
     except ValueError as error:
         raise ConfigurationError(str(error)) from error
     data = load_yaml(config_path)
@@ -300,12 +309,26 @@ def update_manual_technologies(
     if len(matches) != 1:
         raise ConfigurationError("The selected project is no longer unique in local inventory. Reload it.")
     project = matches[0]
+    try:
+        production = normalize_production_technologies(
+            project.get("production_technologies", [])
+            if production_values is None else production_values,
+        )
+    except ValueError as error:
+        raise ConfigurationError(str(error)) from error
     ambiguous = ambiguous_manual_dependencies(project, manual)
     if ambiguous:
         raise ConfigurationError(
             "Select an ecosystem for ambiguous dependencies: " + ", ".join(ambiguous)
         )
+    ambiguous_production = ambiguous_manual_dependencies(project, production)
+    if ambiguous_production:
+        raise ConfigurationError(
+            "Select an ecosystem for ambiguous production dependencies: "
+            + ", ".join(ambiguous_production)
+        )
     project["manual_technologies"] = manual
+    project["production_technologies"] = production
     write_config_text(config_path, dump_config_data(data), private=True)
     return project
 
@@ -467,10 +490,38 @@ def inventory_technology_labels(project: dict[str, Any]) -> list[str]:
     """Show effective versions and inventory quality without security conclusions."""
     labels = []
     symbols = {"green": "●", "orange": "●", "red": "●"}
+    production: dict[tuple[str, str, str], list[dict[str, str]]] = {}
+    for item in production_technology_records(project):
+        key = (
+            item["category"], item["name"].casefold(), item.get("ecosystem", "").casefold(),
+        )
+        production.setdefault(key, []).append(item)
+    seen: set[tuple[str, str, str]] = set()
     for item in project_technology_records(project):
         version = item.get("version") or "version missing"
-        labels.append(f"{symbols[item['quality']]} {item['name']} {version}")
-    return labels
+        key = (
+            item["category"], item["name"].casefold(), item.get("ecosystem", "").casefold(),
+        )
+        seen.add(key)
+        production_text = (
+            " · prod " + ", ".join(
+                f"{value['environment']}={value['version']}"
+                for value in production.get(key, [])
+            ) if production.get(key) else ""
+        )
+        labels.append(f"{symbols[item['quality']]} {item['name']} {version}{production_text}")
+    for key, deployments in production.items():
+        if key in seen:
+            continue
+        first = deployments[0]
+        production_text = ", ".join(
+            f"{value['environment']}={value['version']}" for value in deployments
+        )
+        labels.append(
+            f"{symbols['red']} {first['name']} inventory version missing · prod "
+            f"{production_text}"
+        )
+    return sorted(labels, key=str.casefold)
 
 
 def reports_config() -> dict[str, Any]:
@@ -820,9 +871,30 @@ def agent_usage_status(provider: str) -> tuple[str, str]:
 
 
 def assistant_prompt(
-    issue: dict[str, str], message: str, history: list[dict[str, str]],
+    issue: dict[str, Any], message: str, history: list[dict[str, str]],
 ) -> str:
     recent = history[-8:]
+    if issue.get("Context type") == "technology-version":
+        return f"""You are the technology version research assistant for fAIry Security Advisory.
+Reply in the user's language and guide them through a read-only, evidence-based investigation.
+Do not modify files, install or update software, start services, or infer a production version
+from development evidence. Distinguish declared, constrained, lockfile-resolved, locally
+installed, container-image, and production versions. Treat a version as exact only when the
+evidence supports it. If evidence is unavailable, say what the user should collect next.
+
+Selected technology context:
+{json.dumps(issue, ensure_ascii=False, indent=2)}
+
+Recent local conversation:
+{json.dumps(recent, ensure_ascii=False, indent=2)}
+
+User message:
+{message}
+
+Provide safe commands or file locations to inspect when useful. End with a short conclusion
+that states the best-supported version, its evidence source and confidence, or clearly says
+that the version remains unknown. Never emit an <issue-update> tag for this context.
+"""
     return f"""You are the issue assistant for fAIry Security Advisory.
 Reply in the user's language. Give concise, evidence-based security guidance.
 Never claim that production is fixed without explicit evidence. Distinguish remediation,
@@ -843,6 +915,40 @@ If the user clearly reports an issue-management change, end with exactly one pro
 Use resolve only with completion evidence. Use not_applicable only with a technical rationale
 or evidence. A proposal is never applied without separate user confirmation in the GUI.
 """
+
+
+def technology_version_assistant_context(
+    project: dict[str, Any], technology: dict[str, Any],
+) -> dict[str, str]:
+    """Build a stable local conversation context for one missing version."""
+    identity = json.dumps([
+        project.get("path", ""), technology.get("category", ""),
+        technology.get("ecosystem", ""), technology.get("name", ""),
+    ], ensure_ascii=False, separators=(",", ":"))
+    digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:16]
+    return {
+        "ID": f"TECH-VERSION-{digest}",
+        "Context type": "technology-version",
+        "Project": str(project.get("id") or "Unknown project"),
+        "Project path": str(project.get("path") or "Not available"),
+        "Technology": str(technology.get("name") or "Unknown technology"),
+        "Category": str(technology.get("category") or "other"),
+        "Ecosystem": str(technology.get("ecosystem") or "Not specified"),
+        "Inventory source": str(technology.get("source") or "Unknown"),
+        "Current version": str(technology.get("version") or "Missing"),
+    }
+
+
+def technology_version_assistant_prompt(context: dict[str, str]) -> str:
+    """Return an editable starter message for guided version research."""
+    return (
+        f"Help me determine the exact version of {context['Technology']} used by "
+        f"project {context['Project']}. Start with the strongest read-only evidence "
+        "available in the project (manifests, lockfiles, runtime or container "
+        "configuration, and safe version commands), guide me step by step, and ask "
+        "for any evidence you cannot access. Keep declared, resolved, locally installed, "
+        "and production versions separate. Do not change files or install anything."
+    )
 
 
 def assistant_command(provider: str, profile: str, prompt: str) -> list[str]:

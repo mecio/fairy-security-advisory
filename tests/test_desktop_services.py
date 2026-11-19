@@ -15,19 +15,36 @@ import yaml
 
 from desktop.services import (
     ConfigurationError, accept_eula, agent_authentication, agent_usage_status, analysis_routing,
-    archive_and_reset_reports,
+    archive_and_reset_reports, assistant_prompt,
     analysis_run_entries, analysis_run_files, assistant_command, delete_analysis_run,
     eula_accepted, extract_issue_update, project_metadata,
     followup_source_links, proposal_changes, security_statistics, update_followup_activity,
     read_analysis_run_file, restore_factory_configuration, validate_config_text,
     write_config_text, update_manual_technologies, technology_names,
     inventory_technology_labels,
+    technology_version_assistant_context, technology_version_assistant_prompt,
+    update_project_technologies,
     update_inventory_preferences,
     write_technology_selection,
 )
 
 
 class DesktopConfigurationServicesTest(unittest.TestCase):
+    def test_technology_version_assistant_uses_read_only_context(self) -> None:
+        context = technology_version_assistant_context(
+            {"id": "api", "path": "/projects/api"},
+            {"name": "PostgreSQL", "category": "databases", "version": "",
+             "source": "configuration"},
+        )
+        message = technology_version_assistant_prompt(context)
+        prompt = assistant_prompt(context, message, [])
+
+        self.assertEqual(context["Context type"], "technology-version")
+        self.assertEqual(context["Current version"], "Missing")
+        self.assertIn("determine the exact version of PostgreSQL", message)
+        self.assertIn("read-only, evidence-based investigation", prompt)
+        self.assertIn("Never emit an <issue-update> tag", prompt)
+
     def test_technology_selection_is_written_as_one_private_request_file(self) -> None:
         with TemporaryDirectory() as directory, patch(
             "desktop.services.ANALYSIS_REQUESTS_DIR", Path(directory),
@@ -70,6 +87,33 @@ class DesktopConfigurationServicesTest(unittest.TestCase):
             self.assertEqual(
                 saved["inventory"]["projects"][0]["manual_technologies"][0]["category"],
                 "databases",
+            )
+
+    def test_production_versions_are_saved_separately_from_inventory_versions(self) -> None:
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "projects.yaml"
+            path.write_text(
+                "schema_version: 1\ninventory:\n  projects:\n"
+                "    - id: workspace\n      path: /private/workspace\n"
+                "      technology_inventory:\n"
+                "        - {name: PostgreSQL, category: databases, version: '17.2'}\n",
+                encoding="utf-8",
+            )
+            production = [{
+                "name": "PostgreSQL", "category": "databases",
+                "environment": "production", "version": "16.4",
+                "evidence_type": "administrator-confirmed",
+                "evidence": "Confirmed by system administrator",
+                "verified_at": "2026-11-19T10:30:00Z",
+            }]
+            with patch("desktop.services.effective_config_path", return_value=path):
+                project = update_project_technologies(
+                    "/private/workspace", [], production,
+                )
+            self.assertEqual(project["production_technologies"], production)
+            self.assertEqual(project["technology_inventory"][0]["version"], "17.2")
+            self.assertIn(
+                "prod production=16.4", inventory_technology_labels(project)[0],
             )
 
     def test_ambiguous_dependency_requires_ecosystem_before_saving(self) -> None:

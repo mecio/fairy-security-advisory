@@ -5,6 +5,7 @@ import os
 import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -13,21 +14,27 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 try:
     from PySide6.QtCore import QProcess, QUrl
     from PySide6.QtCore import Qt
-    from PySide6.QtWidgets import QApplication, QComboBox, QLabel, QMessageBox, QPushButton
+    from PySide6.QtWidgets import (
+        QApplication, QComboBox, QDialog, QLabel, QMessageBox, QPushButton,
+        QTreeWidgetItem,
+    )
     from desktop import services
     from desktop.eula_dialog import EulaDialog
     from desktop.inventory_technologies_dialog import InventoryTechnologiesDialog
-    from desktop.main_window import BarChartCard, MainWindow, PAGE_RUN
+    from desktop.main_window import BarChartCard, MainWindow, PAGE_ASSISTANT, PAGE_RUN
     from desktop.run_visualization import RunJourneyWidget
 except ImportError:
     QApplication = None
     BarChartCard = None
     MainWindow = None
     PAGE_RUN = None
+    PAGE_ASSISTANT = None
     QLabel = None
     QPushButton = None
     QUrl = None
     QProcess = None
+    QDialog = None
+    QTreeWidgetItem = None
     Qt = None
     EulaDialog = None
     InventoryTechnologiesDialog = None
@@ -107,7 +114,8 @@ class DesktopWindowTest(unittest.TestCase):
         application = QApplication.instance() or QApplication([])
         dialog = InventoryTechnologiesDialog({"id": "workspace"}, ["Python"])
         self.assertEqual([dialog.tabs.tabText(index) for index in range(dialog.tabs.count())],
-                         ["Inventory technologies", "Add / edit technology"])
+                         ["Inventory technologies", "Add / edit technology",
+                          "Production versions", "Add / edit production"])
         self.assertEqual(dialog.tabs.currentIndex(), 0)
         dialog.add_button.click()
         self.assertEqual(dialog.tabs.currentIndex(), 1)
@@ -125,8 +133,13 @@ class DesktopWindowTest(unittest.TestCase):
         self.assertEqual(dialog.tabs.currentIndex(), 1)
         self.assertEqual(dialog.name.text(), "PostgreSQL")
         dialog.version.setText("unverified")
+        dialog.version_status.setCurrentIndex(
+            dialog.version_status.findData("hypothetical"),
+        )
         dialog._add_or_update()
         self.assertEqual(dialog.manual[0]["version"], "unverified")
+        self.assertEqual(dialog.manual[0]["version_status"], "hypothetical")
+        self.assertEqual(dialog.inventory_table.item(0, 6).text(), "Hypothetical")
         dialog.close()
         dialog.deleteLater()
         application.processEvents()
@@ -151,6 +164,234 @@ class DesktopWindowTest(unittest.TestCase):
         dialog.deleteLater()
         application.processEvents()
 
+    def test_inventory_dialog_records_multiple_production_environments(self) -> None:
+        application = QApplication.instance() or QApplication([])
+        project = {"id": "workspace", "technology_inventory": [{
+            "category": "databases", "name": "PostgreSQL", "version": "17.2",
+            "source": "verified-local",
+        }]}
+        dialog = InventoryTechnologiesDialog(project, [])
+        self.assertEqual(dialog.inventory_table.item(0, 4).text(), "Default: 17.2")
+        self.assertIn(
+            "not production verified", dialog.inventory_table.item(0, 5).text(),
+        )
+        dialog.inventory_table.selectRow(0)
+        dialog.add_production_button.click()
+        self.assertEqual(dialog.tabs.currentIndex(), 3)
+        dialog.production_environment.setText("production-eu")
+        dialog.production_version.setText("16.4")
+        dialog.production_evidence_type.setCurrentIndex(
+            dialog.production_evidence_type.findData("administrator-confirmed"),
+        )
+        dialog.production_verified_at.setText("2026-11-19T10:30:00Z")
+        dialog.production_evidence.setText("Confirmed by the system administrator")
+        dialog._add_or_update_production()
+        self.assertEqual(dialog.tabs.currentIndex(), 2)
+        self.assertEqual(dialog.production[0]["environment"], "production-eu")
+        self.assertIn("production-eu: 16.4", dialog.inventory_table.item(0, 4).text())
+
+        dialog.add_production_button.click()
+        dialog.production_environment.setText("production-us")
+        dialog.production_version.setText("16.6")
+        dialog.production_evidence_type.setCurrentIndex(
+            dialog.production_evidence_type.findData("authorized-check"),
+        )
+        dialog.production_verified_at.setText("2026-11-19T10:35:00Z")
+        dialog.production_evidence.setText("Authorized read-only version command")
+        dialog._add_or_update_production()
+        self.assertEqual(len(dialog.production), 2)
+        self.assertEqual(dialog.production_table.rowCount(), 2)
+        dialog._save()
+        self.assertEqual(dialog.result(), dialog.DialogCode.Accepted)
+        dialog.close()
+        dialog.deleteLater()
+        application.processEvents()
+
+    def test_new_production_version_defaults_to_inventory_version(self) -> None:
+        application = QApplication.instance() or QApplication([])
+        project = {"id": "workspace", "technology_inventory": [{
+            "category": "databases", "name": "PostgreSQL", "version": "17.2",
+            "source": "verified-local",
+        }]}
+        dialog = InventoryTechnologiesDialog(project, [])
+        dialog.inventory_table.selectRow(0)
+        dialog.add_production_button.click()
+
+        self.assertEqual(dialog.production_version.text(), "17.2")
+        dialog.production_version.setText("16.4")
+        self.assertEqual(dialog.production_version.text(), "16.4")
+        self.assertEqual(dialog.production, [])
+
+        dialog.close()
+        dialog.deleteLater()
+        application.processEvents()
+
+    def test_inventory_rerender_does_not_retarget_pending_production_version(self) -> None:
+        application = QApplication.instance() or QApplication([])
+        project = {
+            "id": "workspace",
+            "technology_inventory": [{
+                "category": "runtimes", "name": "Beta", "version": "1.0",
+                "source": "declared",
+            }],
+            "manual_technologies": [{
+                "category": "runtimes", "name": "Alpha", "version": "2.0",
+            }],
+        }
+        dialog = InventoryTechnologiesDialog(project, [])
+        dialog.inventory_table.selectRow(0)
+        dialog.add_production_button.click()
+        self.assertEqual(dialog.production_technology.currentText(), "Alpha")
+        self.assertEqual(dialog.production_version.text(), "2.0")
+        dialog.production_evidence.setText("Pending production evidence")
+
+        dialog.tabs.setCurrentIndex(0)
+        dialog.inventory_table.selectRow(0)
+        dialog._edit_selected()
+        dialog.name.setText("Zulu")
+        dialog._add_or_update()
+
+        self.assertEqual(dialog.production_technology.currentIndex(), -1)
+        self.assertTrue(dialog._production_form_dirty)
+
+        dialog.close()
+        dialog.deleteLater()
+        application.processEvents()
+
+    def test_missing_inventory_version_can_open_ai_research(self) -> None:
+        application = QApplication.instance() or QApplication([])
+        project = {"id": "workspace", "path": "/projects/workspace", "technology_inventory": [
+            {"category": "databases", "name": "PostgreSQL", "version": "",
+             "source": "configuration"},
+        ]}
+        dialog = InventoryTechnologiesDialog(project, [])
+        dialog.inventory_table.selectRow(0)
+        self.assertTrue(dialog.find_version_button.isEnabled())
+        dialog.find_version_button.click()
+        self.assertEqual(dialog.ai_version_request["name"], "PostgreSQL")
+        self.assertEqual(dialog.result(), dialog.DialogCode.Accepted)
+
+        window = MainWindow()
+        window.open_technology_version_ai(project, dialog.ai_version_request)
+        context = window.selected_assistant_issue()
+        self.assertEqual(window.pages.currentIndex(), PAGE_ASSISTANT)
+        self.assertEqual(context["Context type"], "technology-version")
+        self.assertEqual(context["Technology"], "PostgreSQL")
+        self.assertIn("determine the exact version of PostgreSQL", window.assistant_input.toPlainText())
+        self.assertIn("VERSION MISSING", window.assistant_issue_details.text())
+        self.assertTrue(window.assistant_send_button.isEnabled())
+        window.close()
+        dialog.deleteLater()
+        window.deleteLater()
+        application.processEvents()
+
+    def test_ai_version_research_confirms_pending_edits_and_rechecks_version(self) -> None:
+        application = QApplication.instance() or QApplication([])
+        project = {"id": "workspace", "technology_inventory": [{
+            "category": "databases", "name": "PostgreSQL", "version": "",
+            "source": "configuration",
+        }]}
+        dialog = InventoryTechnologiesDialog(project, [])
+        dialog.inventory_table.selectRow(0)
+        dialog._edit_selected()
+        dialog.version.setText("17.2")
+        dialog.tabs.setCurrentIndex(0)
+        dialog.inventory_table.selectRow(0)
+
+        with patch.object(
+            QMessageBox, "question", return_value=QMessageBox.StandardButton.No,
+        ) as question:
+            dialog._find_version_with_ai()
+        question.assert_called_once()
+        self.assertEqual(dialog.result(), dialog.DialogCode.Rejected)
+        self.assertIsNone(dialog.ai_version_request)
+        self.assertEqual(dialog.version.text(), "17.2")
+
+        with patch.object(
+            QMessageBox, "question", return_value=QMessageBox.StandardButton.Yes,
+        ):
+            dialog._find_version_with_ai()
+        self.assertEqual(dialog.result(), dialog.DialogCode.Accepted)
+        self.assertEqual(dialog.manual[0]["version"], "17.2")
+        self.assertIsNone(dialog.ai_version_request)
+
+        dialog.close()
+        dialog.deleteLater()
+        application.processEvents()
+
+    def test_ai_version_research_saves_other_preview_changes_before_opening(self) -> None:
+        application = QApplication.instance() or QApplication([])
+        project = {"id": "workspace", "technology_inventory": [{
+            "category": "databases", "name": "PostgreSQL", "version": "",
+            "source": "configuration",
+        }]}
+        dialog = InventoryTechnologiesDialog(project, [])
+        dialog.add_button.click()
+        dialog.name.setText("Redis")
+        dialog.category.setCurrentIndex(dialog.category.findData("databases"))
+        dialog.version.setText("7.2.1")
+        dialog._add_or_update()
+        dialog.inventory_table.selectRow(0)
+
+        with patch.object(
+            QMessageBox, "question", return_value=QMessageBox.StandardButton.Yes,
+        ) as question:
+            dialog._find_version_with_ai()
+        question.assert_called_once()
+        self.assertEqual(dialog.result(), dialog.DialogCode.Accepted)
+        self.assertEqual(dialog.ai_version_request["name"], "PostgreSQL")
+        self.assertEqual(dialog.manual[0]["name"], "Redis")
+
+        dialog.close()
+        dialog.deleteLater()
+        application.processEvents()
+
+    def test_ai_version_research_persists_dialog_changes_before_navigation(self) -> None:
+        application = QApplication.instance() or QApplication([])
+        project = {
+            "id": "workspace", "path": "/projects/workspace",
+            "technology_inventory": [{
+                "category": "databases", "name": "PostgreSQL", "version": "",
+                "source": "configuration",
+            }],
+        }
+        dialog = SimpleNamespace(
+            manual=[{"category": "databases", "name": "Redis", "version": "7.2.1"}],
+            production=[],
+            ai_version_request={
+                "category": "databases", "name": "PostgreSQL", "version": "",
+                "quality": "red", "source": "configuration",
+            },
+            exec=lambda: QDialog.DialogCode.Accepted,
+        )
+        updated = {**project, "manual_technologies": dialog.manual}
+        events: list[str] = []
+        window = MainWindow()
+        with patch.object(services, "inventory_projects", return_value=[project]):
+            window.load_inventory()
+        window.inventory_tree.setCurrentItem(window.inventory_tree.topLevelItem(0))
+
+        def save(*_args: object) -> dict[str, object]:
+            events.append("save")
+            return updated
+
+        def navigate(*_args: object) -> None:
+            events.append("open-ai")
+
+        with patch("desktop.main_window.InventoryTechnologiesDialog", return_value=dialog), \
+             patch.object(services, "inventory_projects", return_value=[project]), \
+             patch.object(services, "technology_names", return_value=[]), \
+             patch.object(services, "update_project_technologies", side_effect=save), \
+             patch.object(window, "load_inventory"), \
+             patch.object(window, "load_initialization_scope"), \
+             patch.object(window, "open_technology_version_ai", side_effect=navigate):
+            window.edit_inventory_technologies()
+
+        self.assertEqual(events, ["save", "open-ai"])
+        window.close()
+        window.deleteLater()
+        application.processEvents()
+
     def test_inventory_dialog_edits_visible_version_without_recreating_other_version(self) -> None:
         application = QApplication.instance() or QApplication([])
         project = {"id": "workspace", "technology_inventory": [
@@ -163,6 +404,7 @@ class DesktopWindowTest(unittest.TestCase):
         self.assertFalse(dialog.inventory_table.item(0, 3).flags() & Qt.ItemFlag.ItemIsEditable)
         self.assertFalse(dialog.inventory_table.item(0, 0).flags() & Qt.ItemFlag.ItemIsEditable)
         dialog.inventory_table.selectRow(0)
+        self.assertFalse(dialog.find_version_button.isEnabled())
         dialog.edit_button.click()
         self.assertEqual(dialog.tabs.currentIndex(), 1)
         self.assertEqual(dialog.version.text(), "1.0.0")
@@ -198,7 +440,7 @@ class DesktopWindowTest(unittest.TestCase):
         dialog.exclude.setChecked(True)
         dialog._add_or_update()
         self.assertTrue(dialog.manual[0]["exclude"])
-        self.assertEqual(dialog.inventory_table.item(0, 5).text(), "Excluded by user")
+        self.assertEqual(dialog.inventory_table.item(0, 7).text(), "Excluded by user")
         dialog.inventory_table.selectRow(0)
         dialog.edit_button.click()
         self.assertTrue(dialog.exclude.isChecked())
@@ -206,7 +448,7 @@ class DesktopWindowTest(unittest.TestCase):
         dialog.tabs.setCurrentIndex(0)
         dialog.remove_button.click()
         self.assertEqual(dialog.manual, [])
-        self.assertEqual(dialog.inventory_table.item(0, 5).text(), "Go-Replaced")
+        self.assertEqual(dialog.inventory_table.item(0, 7).text(), "Go-Replaced")
         dialog._save()
         self.assertEqual(dialog.result(), dialog.DialogCode.Accepted)
         dialog.close()
@@ -280,7 +522,7 @@ class DesktopWindowTest(unittest.TestCase):
             ["Activity", "Technology baselines", "Detailed log"],
         )
         self.assertTrue(window.run_tabs.widget(1).isAncestorOf(window.technology_scan_tree))
-        self.assertGreater(window.technology_scan_tree.height(), 250)
+        self.assertGreater(window.technology_scan_tree.height(), 220)
         window.run_tabs.setCurrentIndex(2)
         application.processEvents()
         self.assertGreater(window.log.height(), 250)
@@ -467,18 +709,64 @@ class DesktopWindowTest(unittest.TestCase):
         ) as question, patch(
             "desktop.main_window.services.write_technology_selection",
             return_value=Path("/private/selection.json"),
-        ), patch.object(window, "start_action") as start:
+        ) as write_selection, patch.object(window, "start_action") as start:
             window.run_ai_analysis()
 
         message = question.call_args.args[2]
         self.assertIn(routing["summary"], message)
         self.assertIn("codex: codex-model", message)
         self.assertIn("claude: claude-model", message)
+        self.assertIn("Historical baseline scan", message)
+        selected_keys = [
+            str(window.technology_scan_tree.topLevelItem(index).data(
+                0, Qt.ItemDataRole.UserRole,
+            ))
+            for index in range(window.technology_scan_tree.topLevelItemCount())
+            if window.technology_scan_tree.topLevelItem(index).checkState(0)
+            == Qt.CheckState.Checked
+        ]
+        write_selection.assert_called_once_with(selected_keys)
         start.assert_called_once_with(
             "ai-check", provider="codex", profile="balanced", mode="economical",
             assume_yes=True, non_interactive=True,
             technology_selection_file=Path("/private/selection.json"),
         )
+        window.close()
+        window.deleteLater()
+        application.processEvents()
+
+    def test_scan_all_technologies_ignores_baseline_checkboxes(self) -> None:
+        application = QApplication.instance() or QApplication([])
+        window = MainWindow()
+        self.assertEqual(window.scan_selected_button.text(), "Scan selected technologies")
+        self.assertEqual(window.scan_all_button.text(), "Scan all technologies")
+        window.technology_scan_tree.clear()
+        for key, checked in (("php-key", False), ("shell-key", True)):
+            item = QTreeWidgetItem((
+                "", key, "1.0", "Inventory", "Certain", "Missing", "app",
+            ))
+            item.setData(0, Qt.ItemDataRole.UserRole, key)
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            item.setCheckState(
+                0, Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked,
+            )
+            window.technology_scan_tree.addTopLevelItem(item)
+        routing = {
+            "summary": "Codex: 1 project(s); Claude: 0 project(s); excluded: 0",
+            "groups": {"codex": 1, "claude": 0}, "excluded": 0, "selected": 1,
+            "required_providers": ["codex"],
+        }
+        with patch.object(services, "analysis_routing", return_value=routing), \
+             patch.object(services, "ai_model", return_value="codex-model"), \
+             patch.object(services, "sandbox_preflight", return_value={"ready": True}), \
+             patch.object(QMessageBox, "question", return_value=QMessageBox.StandardButton.Yes), \
+             patch.object(
+                 services, "write_technology_selection",
+                 return_value=Path("/private/all-selection.json"),
+             ) as write_selection, patch.object(window, "start_action"):
+            window.run_ai_analysis(scan_all=True)
+
+        write_selection.assert_called_once_with(["php-key", "shell-key"])
         window.close()
         window.deleteLater()
         application.processEvents()
@@ -507,7 +795,17 @@ class DesktopWindowTest(unittest.TestCase):
         self.assertEqual(selector.currentData(), "claude")
         self.assertEqual(item.childCount(), 0)
         self.assertIn("Python version missing", item.text(4))
-        self.assertEqual(window.edit_technologies_button.text(), "Details")
+        self.assertEqual([
+            window.inventory_actions_layout.itemAt(index).widget().text()
+            for index in range(3)
+        ], ["Details", "Reload from paths", "Save"])
+        self.assertEqual(window.global_reload_action.text(), "Reload all views")
+        self.assertFalse(window.global_reload_action.icon().isNull())
+        self.assertTrue(window.global_reload_action.isEnabled())
+        with patch.object(window, "reload_views") as reload_views:
+            window.reload_views_from_toolbar()
+        reload_views.assert_called_once_with()
+        self.assertIn("were not rescanned", window.statusBar().currentMessage())
         self.assertFalse(window.edit_technologies_button.isEnabled())
         window.inventory_tree.setCurrentItem(item)
         self.assertTrue(window.edit_technologies_button.isEnabled())
@@ -553,7 +851,7 @@ class DesktopWindowTest(unittest.TestCase):
                 if window.navigation.item(index).flags() & Qt.ItemFlag.ItemIsSelectable
             ],
             [
-                "Dashboard", "Reports", "Run check", "AI issue assistant", "Logs",
+                "Dashboard", "Reports", "Run check", "AI assistant", "Logs",
                 "Inventory", "Configuration", "System status", "User guide", "About",
             ],
         )

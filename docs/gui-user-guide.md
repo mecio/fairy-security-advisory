@@ -20,7 +20,7 @@ remain in Git-ignored local directories.
 - [Technology inventory](#technology-inventory)
 - [Reports and follow-up](#reports-and-follow-up)
 - [Analysis logs](#analysis-logs)
-- [AI issue assistant](#ai-issue-assistant)
+- [AI assistant](#ai-assistant)
 - [Running security checks](#running-security-checks)
 - [System status and AI authentication](#system-status-and-ai-authentication)
 - [Configuration backups](#configuration-backups)
@@ -311,9 +311,15 @@ subscription remainder.
 The Technology inventory page shows one row per project, with its roles and a
 summary of technologies and effective versions. Select a project and click
 **Details** to inspect the individual technologies and their version evidence.
-In the detail table, red means missing, orange means declared, uncertain, or
-constrained, and green means exact and resolved from a lockfile or verified
-locally. Manually supplied versions remain orange until independently verified.
+The reload icon in the application toolbar rereads dynamic local data for every
+view without rescanning project paths or reloading configuration editors.
+Unsaved **Check** and **Preferred AI** choices return to their saved values.
+In the detail table, **Inventory version** and **Production version** are
+separate. Red means missing, orange means declared, uncertain, constrained, or
+reported without verification, and green means exact and supported by an
+authoritative source. Manually supplied inventory versions remain orange until
+independently verified. Production evidence is green only after administrator
+confirmation or an explicitly authorized check.
 These colors describe version evidence only, never security risk. The inventory
 includes technologies supported by file, manifest, lockfile, or configuration evidence.
 Roles such as frontend, backend, infrastructure, or mixed are classification
@@ -329,7 +335,7 @@ in the inventory so that it can be selected again later.
 **Preferred AI** accepts **-**, **Codex**, or **Claude**. The default **-** uses
 the coordinator selected in Run check. An explicit Codex or Claude choice
 routes that project to the matching CLI and to that provider's model in the
-selected profile. Click **Save project choices** to write these choices to
+selected profile. Click **Save** to write these choices to
 ignored local configuration.
 
 Select a project and open **Details**. The
@@ -340,9 +346,39 @@ or other fields, then click **Apply change** and **Save changes**. Editing one
 version leaves other detected versions of the same package in place. Use
 **Add technology** to open a blank form for a missed technology, such as a
 database not named in a manifest. **Remove manual decision** removes a saved
-override or exclusion; detected findings remain in the inventory. A manual version is a user statement until checked
+override or exclusion; detected findings remain in the inventory. When a
+selected technology has no inventory version, **Find inventory version with AI** opens the AI
+assistant with the project and inventory evidence as context and an editable,
+read-only research prompt. If Inventory or Production edits are pending, fAIry
+asks whether to save them first; choosing No keeps the dialog open without
+discarding changes. After saving, the assistant opens only when the technology
+is still without a version. If validation or persistence fails, it does not
+open. The assistant guides inspection of manifests,
+lockfiles, runtime or container configuration, and safe version commands; it
+does not write the result into the inventory. Return to **Details** to review
+and save any version supported by the collected evidence. A manual version is a user statement until checked
 against the environment; it never proves the version running in production.
+Every populated Inventory version is nevertheless used unchanged for advisory
+matching. **Version status** is an editable indication for the user and does not
+enable, disable, or replace that version in the analysis scope. It remains in
+the inventory GUI and is omitted from the advisory plan sent to the AI.
 Only the Git-ignored `config/local/projects.yaml` is updated.
+
+Use **Production versions** to record one or more deployment environments for
+an inventoried technology. Each entry requires an environment, production
+version, evidence type, evidence note, and timezone-aware verification time;
+the GUI normalizes that time to UTC. A new record starts with the selected
+inventory version copied into the production-version field. When no explicit
+environment record exists, the Production version column follows the scanned
+Inventory version and labels it as an unverified inventory default. Change it
+manually when an environment differs. The default does not become verified
+production evidence until the required evidence is entered and the dialog is
+saved. Administrator confirmation and authorized
+read-only checks are distinct from a reported, unverified value. Production
+records do not replace the inventory version. Every distinct inventory and
+production version appears separately in **Run check → Technology baselines**;
+when the same version exists in both contexts, one baseline retains both the
+inventory and production-environment evidence.
 
 The inventory can include languages and versions, frameworks, runtimes,
 package manifests, lockfiles, databases, web servers, reverse proxies,
@@ -351,7 +387,7 @@ virtualization components when recognizable evidence exists. Absence from the
 table means the detector did not find sufficient evidence; it does not prove a
 technology is absent from production.
 
-Use **Refresh inventory from configured paths** after adding a project,
+Use **Reload from paths** after adding a project,
 changing exclusions, or making significant dependency changes. The refresh:
 
 1. reads enabled project roots and their exclusion rules;
@@ -360,10 +396,11 @@ changing exclusions, or making significant dependency changes. The refresh:
 4. writes the resulting structured inventory only to ignored local
    configuration.
 
-Before replacement, fAIry warns that technology/version edits will be lost and
+Before replacement, fAIry warns that inventory technology/version edits will be lost and
 creates a private configuration backup containing the previous inventory.
 Refreshing preserves saved project checkboxes and preferred-AI choices, but
-replaces detected and manual technology/version entries. Newly discovered
+replaces detected and manual technology/version entries. Separately evidenced
+production versions are preserved. Newly discovered
 projects are selected by default and use **-** as their AI preference. A stale
 inventory is reported before analysis but is never refreshed implicitly.
 
@@ -444,10 +481,16 @@ and evidence dossiers. It does not remove daily reports, follow-up activities,
 configuration, or scanned projects. Empty year and month directories are
 cleaned up automatically. Log archives remain local and Git-ignored.
 
-## AI issue assistant
+## AI assistant
 
-The AI issue assistant provides a focused conversation about one existing open
-follow-up activity. It is intended for questions such as how to validate
+The AI assistant provides either a guided investigation of a missing technology
+version or a focused conversation about one existing open follow-up activity.
+The version-research context is prepared by **Find inventory version with AI** in the
+technology details dialog and works even when no follow-up activity exists.
+It keeps declared, resolved, locally installed, container, and production
+versions separate and never updates the inventory automatically.
+
+For follow-up work, it is intended for questions such as how to validate
 applicability, what evidence is still missing, which remediation order is
 safest, who has taken ownership, or why an advisory is not relevant to a
 specific project.
@@ -586,10 +629,14 @@ accuracy of that source.
 This action accesses the network but does not invoke the AI agent and does not
 modify scanned projects.
 
-### Run complete AI analysis
+### Scan selected or all technologies
 
-**Run complete AI analysis** starts the shared security-advisory skill through
-the selected authenticated CLI. Before launch, fAIry validates configuration,
+**Scan selected technologies** starts the shared security-advisory skill and
+runs historical baselines only for the checked technology rows. **Scan all
+technologies** selects every listed row for historical baseline scanning,
+regardless of its checkbox. Both actions keep the normal incremental check over
+the complete active technology scope; when no row is checked, Scan selected is
+therefore an incremental-only run. Before launch, fAIry validates configuration,
 warns about stale inventory without changing it, checks prerequisites, and
 tests source reachability. The agent is started from the fAIry project root so it receives
 the project instructions, skill, effective local configuration, inventory,

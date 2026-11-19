@@ -30,9 +30,9 @@ try:
 except ImportError:
     from scripts.release_cache import load_cache, ReleaseCacheError, SHARED_CACHE
 try:
-    from inventory import normalize_manual_technologies
+    from inventory import normalize_manual_technologies, normalize_production_technologies
 except ImportError:
-    from scripts.inventory import normalize_manual_technologies
+    from scripts.inventory import normalize_manual_technologies, normalize_production_technologies
 try:
     from technology_state import ambiguous_manual_dependencies
 except ImportError:
@@ -174,10 +174,17 @@ def main() -> int:
             continue
         try:
             manual = normalize_manual_technologies(project.get("manual_technologies", []))
+            production = normalize_production_technologies(
+                project.get("production_technologies", []),
+            )
             ambiguous = ambiguous_manual_dependencies(project, manual)
             if ambiguous:
                 fail(f"inventory project {index}: manual dependencies need an ecosystem: "
                      + ", ".join(ambiguous), errors)
+            ambiguous_production = ambiguous_manual_dependencies(project, production)
+            if ambiguous_production:
+                fail(f"inventory project {index}: production dependencies need an ecosystem: "
+                     + ", ".join(ambiguous_production), errors)
         except ValueError as error:
             fail(f"inventory project {index}: {error}", errors)
         advisory_checks = project.get("advisory_checks", {})

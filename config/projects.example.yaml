@@ -28,8 +28,16 @@ inventory:
   # selected at launch; explicit providers route that project to the matching CLI.
   # These choices survive inventory refreshes.
   # The GUI can also add local-only manual_technologies to detected projects:
-  # manual_technologies: [{name: PostgreSQL, category: databases}]
+  # manual_technologies: [{name: PostgreSQL, category: databases, version: "17.2",
+  #   version_status: hypothetical}]
+  # version_status may be confirmed, unverified, or hypothetical. It is an
+  # informational user assessment; the populated version is always used for matching.
   # They are user-declared context, not verified installed or production versions,
   # and override matching scanner values until the user explicitly confirms a new
   # inventory refresh, which replaces both detected and manual technology values.
+  # Separately evidenced production_technologies are local-only records with an
+  # environment, version, evidence type, evidence note, and UTC verification time.
+  # Example evidence_type values: administrator-confirmed, authorized-check,
+  # or reported-unverified. The GUI creates and validates these records.
+  # They survive inventory refreshes and are included independently in advisory scope.
   projects: []

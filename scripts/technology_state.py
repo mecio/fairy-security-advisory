@@ -48,14 +48,23 @@ def normalize_version(value: Any) -> str:
     return value.casefold() if value else UNKNOWN_VERSION
 
 
-def version_quality(version: Any, source: str = "detected") -> str:
+def version_quality(
+    version: Any, source: str = "detected", version_status: str = "",
+) -> str:
     """Classify version evidence without confusing declarations with verification."""
     value = _clean(version)
     if not value or value.casefold() in {"unknown", "unconstrained", "latest", "stable"}:
         return "red"
+    if version_status == "confirmed":
+        return "green"
+    if version_status in {"unverified", "hypothetical"}:
+        return "orange"
     exact = re.fullmatch(r"v?\d+(?:\.\d+){1,3}(?:[-+][0-9A-Za-z.-]+)?", value)
     digest = re.fullmatch(r"sha256:[0-9a-fA-F]{64}", value)
-    authoritative = source in {"resolved-lockfile", "verified-local"}
+    authoritative = source in {
+        "resolved-lockfile", "verified-local",
+        "production-administrator-confirmed", "production-authorized-check",
+    }
     return "green" if (exact or digest) and authoritative else "orange"
 
 
@@ -110,7 +119,7 @@ def ambiguous_manual_dependencies(
 def _add_record(
     records: dict[tuple[str, str, str, str], dict[str, str]], category: str, name: Any,
     version: Any = "", source: str = "detected", ecosystem: str = "",
-    public_registry: bool = False,
+    public_registry: bool = False, version_status: str = "",
 ) -> None:
     name_text = _clean(name)
     if not name_text:
@@ -120,12 +129,14 @@ def _add_record(
     existing = records.get(key)
     candidate = {
         "category": category, "name": name_text, "version": version_text,
-        "quality": version_quality(version_text, source), "source": source,
+        "quality": version_quality(version_text, source, version_status), "source": source,
     }
     if ecosystem:
         candidate["ecosystem"] = ecosystem
     if public_registry:
         candidate["public_registry"] = True
+    if version_status:
+        candidate["version_status"] = version_status
     if existing is None or (
         existing["quality"] != "green" and candidate["quality"] == "green"
     ):
@@ -234,9 +245,49 @@ def project_technology_records(project: dict[str, Any]) -> list[dict[str, str]]:
             known = detected_ecosystems.get(canonical_identity(category, name), set())
             if len(known) == 1:
                 ecosystem = next(iter(known))
-        _add_record(records, category, name, item.get("version"), "manual",
-                    ecosystem)
+        _add_record(
+            records, category, name, item.get("version"), "manual", ecosystem,
+            version_status=_clean(item.get("version_status")),
+        )
     return sorted(records.values(), key=lambda item: (item["name"].casefold(), item["version"]))
+
+
+def production_technology_records(project: dict[str, Any]) -> list[dict[str, str]]:
+    """Return production versions without conflating them with local inventory."""
+    records: list[dict[str, str]] = []
+    for item in project.get("production_technologies", []) or []:
+        if not isinstance(item, dict):
+            continue
+        name = _clean(item.get("name"))
+        category = _clean(item.get("category")) or "other"
+        version = _clean(item.get("version"))
+        environment = _clean(item.get("environment"))
+        evidence_type = _clean(item.get("evidence_type")) or "reported-unverified"
+        if not name or not version or not environment:
+            continue
+        source = f"production-{evidence_type}"
+        record = {
+            "category": category,
+            "name": name,
+            "version": version,
+            "quality": version_quality(version, source),
+            "source": source,
+            "environment": environment,
+            "evidence_type": evidence_type,
+            "evidence": _clean(item.get("evidence")),
+            "verified_at": _clean(item.get("verified_at")),
+        }
+        ecosystem = _clean(item.get("ecosystem"))
+        if ecosystem:
+            record["ecosystem"] = ecosystem
+        records.append(record)
+    return sorted(
+        records,
+        key=lambda item: (
+            item["name"].casefold(), item.get("ecosystem", ""),
+            item["environment"].casefold(), item["version"],
+        ),
+    )
 
 
 def collect_technology_scope(config: dict[str, Any]) -> list[dict[str, Any]]:
@@ -252,24 +303,70 @@ def collect_technology_scope(config: dict[str, Any]) -> list[dict[str, Any]]:
         if isinstance(settings, dict) and settings.get("enabled", True) is False:
             continue
         project_id = _clean(project.get("id")) or "unnamed"
-        records = project_technology_records(project)
+        inventory_records = project_technology_records(project)
+        production_records = production_technology_records(project)
         versioned_products = {
             (canonical_identity(record["category"], record["name"]),
              _clean(record.get("ecosystem")).casefold())
-            for record in records if record.get("version")
+            for record in inventory_records if record.get("version")
         }
-        for record in records:
+        for record in [*inventory_records, *production_records]:
             identity = (canonical_identity(record["category"], record["name"]),
                         _clean(record.get("ecosystem")).casefold())
-            if not record.get("version") and identity in versioned_products:
+            is_production = "environment" in record
+            if not is_production and not record.get("version") and identity in versioned_products:
                 continue
             key = technology_key(record["category"], record["name"], record["version"],
                                  record.get("ecosystem", ""))
-            entry = combined.setdefault(key, {**record, "key": key, "projects": []})
+            display_only_fields = {"version_status"}
+            if is_production:
+                # Environment-specific evidence belongs only to the deployment
+                # list. Keeping a second singular copy on the aggregate entry
+                # can combine fields from different environments.
+                display_only_fields.update({
+                    "environment", "evidence_type", "evidence", "verified_at",
+                })
+            scope_record = {
+                field: value for field, value in record.items()
+                if field not in display_only_fields
+            }
+            if not is_production:
+                # A user-selected version status is display metadata. Advisory
+                # scope uses the saved version and technical source unchanged.
+                scope_record["quality"] = version_quality(
+                    record.get("version"), str(record.get("source") or "detected"),
+                )
+            entry = combined.setdefault(
+                key, {**scope_record, "key": key, "projects": []},
+            )
+            if entry.get("quality") != "green" and scope_record.get("quality") == "green":
+                entry["quality"] = "green"
+                entry["source"] = scope_record["source"]
             if project_id not in entry["projects"]:
                 entry["projects"].append(project_id)
+            if is_production:
+                deployment = {
+                    "project": project_id,
+                    "environment": record["environment"],
+                    "evidence_type": record["evidence_type"],
+                    "evidence": record["evidence"],
+                    "verified_at": record["verified_at"],
+                }
+                deployments = entry.setdefault("production_deployments", [])
+                if deployment not in deployments:
+                    deployments.append(deployment)
+            else:
+                inventory_projects = entry.setdefault("inventory_projects", [])
+                if project_id not in inventory_projects:
+                    inventory_projects.append(project_id)
     for entry in combined.values():
         entry["projects"].sort(key=str.casefold)
+        if "inventory_projects" in entry:
+            entry["inventory_projects"].sort(key=str.casefold)
+        if "production_deployments" in entry:
+            entry["production_deployments"].sort(
+                key=lambda item: (item["project"].casefold(), item["environment"].casefold()),
+            )
     return sorted(
         combined.values(), key=lambda item: (item["name"].casefold(), item["version"], item["key"]),
     )

@@ -68,6 +68,10 @@ MANUAL_TECH_CATEGORIES = (
     "web_servers_and_proxies", "containers", "operating_systems", "ci_cd",
     "infrastructure_as_code", "virtualization_and_services", "other",
 )
+VERSION_STATUSES = ("confirmed", "unverified", "hypothetical")
+PRODUCTION_EVIDENCE_TYPES = (
+    "administrator-confirmed", "authorized-check", "reported-unverified",
+)
 
 EXT_LANG = {
     ".php": "PHP", ".py": "Python", ".js": "JavaScript", ".jsx": "JavaScript/JSX",
@@ -120,6 +124,7 @@ def normalize_manual_technologies(values: Any) -> list[dict[str, Any]]:
         ecosystem = value.get("ecosystem", "")
         exclude = value.get("exclude", False)
         replaces_version = value.get("replaces_version")
+        version_status = value.get("version_status", "")
         if not isinstance(name, str) or not name.strip() or len(name.strip()) > 120:
             raise ValueError(f"manual technology {index} needs a name of at most 120 characters")
         if not isinstance(category, str) or category not in MANUAL_TECH_CATEGORIES:
@@ -136,6 +141,12 @@ def normalize_manual_technologies(values: Any) -> list[dict[str, Any]]:
             raise ValueError(f"manual technology {index} has an invalid exclusion")
         if exclude and version.strip():
             raise ValueError(f"manual technology {index} cannot have both an exclusion and version")
+        if version_status not in {"", *VERSION_STATUSES}:
+            raise ValueError(f"manual technology {index} has an unsupported version status")
+        if version_status and (exclude or not version.strip()):
+            raise ValueError(
+                f"manual technology {index} needs a version for its version status"
+            )
         if replaces_version is not None and (
             not isinstance(replaces_version, str) or len(replaces_version.strip()) > 120 or exclude
         ):
@@ -160,6 +171,8 @@ def normalize_manual_technologies(values: Any) -> list[dict[str, Any]]:
             item["exclude"] = True
         if replaces_version is not None:
             item["replaces_version"] = replaces_version.strip()
+        if version_status:
+            item["version_status"] = version_status
         normalized.append(item)
     excluded = {(item["category"], item["name"].casefold(), item.get("ecosystem", ""))
                 for item in normalized if item.get("exclude")}
@@ -167,6 +180,90 @@ def normalize_manual_technologies(values: Any) -> list[dict[str, Any]]:
            and not item.get("exclude") for item in normalized):
         raise ValueError("a manual dependency cannot be both excluded and versioned")
     return normalized
+
+
+def normalize_production_technologies(values: Any) -> list[dict[str, str]]:
+    """Validate environment-specific production versions and their evidence."""
+    if not isinstance(values, list):
+        raise ValueError("production_technologies must be a list")
+    normalized: list[dict[str, str]] = []
+    seen: set[tuple[str, str, str, str]] = set()
+    for index, value in enumerate(values, start=1):
+        if not isinstance(value, dict):
+            raise ValueError(f"production technology {index} must be a mapping")
+        name = value.get("name")
+        category = value.get("category")
+        ecosystem = value.get("ecosystem", "")
+        environment = value.get("environment")
+        version = value.get("version")
+        evidence_type = value.get("evidence_type")
+        evidence = value.get("evidence")
+        verified_at = value.get("verified_at")
+        if not isinstance(name, str) or not name.strip() or len(name.strip()) > 120:
+            raise ValueError(f"production technology {index} needs a name of at most 120 characters")
+        if not isinstance(category, str) or category not in MANUAL_TECH_CATEGORIES:
+            raise ValueError(f"production technology {index} has an unsupported category")
+        if not isinstance(ecosystem, str) or (ecosystem.strip() and (
+            category != "dependencies"
+            or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]{0,31}", ecosystem.strip())
+        )):
+            raise ValueError(f"production technology {index} has an invalid ecosystem")
+        if (not isinstance(environment, str) or not environment.strip()
+            or len(environment.strip()) > 80):
+            raise ValueError(f"production technology {index} needs an environment of at most 80 characters")
+        if not isinstance(version, str) or not version.strip() or len(version.strip()) > 120:
+            raise ValueError(f"production technology {index} needs a version of at most 120 characters")
+        if evidence_type not in PRODUCTION_EVIDENCE_TYPES:
+            raise ValueError(f"production technology {index} has an unsupported evidence type")
+        if (not isinstance(evidence, str) or not evidence.strip()
+            or len(evidence.strip()) > 500):
+            raise ValueError(f"production technology {index} needs evidence of at most 500 characters")
+        if not isinstance(verified_at, str) or not verified_at.strip():
+            raise ValueError(f"production technology {index} needs a verification timestamp")
+        try:
+            parsed = dt.datetime.fromisoformat(verified_at.strip().replace("Z", "+00:00"))
+        except ValueError as error:
+            raise ValueError(
+                f"production technology {index} has an invalid verification timestamp"
+            ) from error
+        if parsed.tzinfo is None:
+            raise ValueError(
+                f"production technology {index} verification timestamp needs a timezone"
+            )
+        values_to_check = (name, ecosystem, environment, version, evidence)
+        if any(any(ord(character) < 32 for character in field) for field in values_to_check):
+            raise ValueError(f"production technology {index} contains a control character")
+        key = (
+            category, name.strip().casefold(), ecosystem.strip().casefold(),
+            environment.strip().casefold(),
+        )
+        if key in seen:
+            raise ValueError(
+                f"duplicate production environment for technology: {name.strip()} / "
+                f"{environment.strip()}"
+            )
+        seen.add(key)
+        item = {
+            "name": name.strip(),
+            "category": category,
+            "environment": environment.strip(),
+            "version": version.strip(),
+            "evidence_type": str(evidence_type),
+            "evidence": evidence.strip(),
+            "verified_at": parsed.astimezone(dt.timezone.utc).isoformat(
+                timespec="seconds",
+            ).replace("+00:00", "Z"),
+        }
+        if ecosystem.strip():
+            item["ecosystem"] = ecosystem.strip().casefold()
+        normalized.append(item)
+    return sorted(
+        normalized,
+        key=lambda item: (
+            item["name"].casefold(), item.get("ecosystem", ""),
+            item["environment"].casefold(),
+        ),
+    )
 
 
 def atomic_write_yaml(path: Path, data: dict[str, Any]) -> None:
@@ -788,12 +885,16 @@ def analyze_project(
 def build_inventory(config: dict[str, Any]) -> list[dict[str, Any]]:
     limit = int(config.get("inventory", {}).get("max_files_per_project", 20000))
     previous_preferences: dict[str, dict[str, Any]] = {}
+    previous_production: dict[str, list[dict[str, str]]] = {}
     for previous in config.get("inventory", {}).get("projects", []):
         if not isinstance(previous, dict) or not previous.get("path"):
             continue
         settings = previous.get("advisory_checks", {})
         if isinstance(settings, dict):
             previous_preferences[str(previous["path"])] = settings
+        previous_production[str(previous["path"])] = normalize_production_technologies(
+            previous.get("production_technologies", []),
+        )
     projects: dict[Path, tuple[Path, tuple[str, ...]]] = {}
     for item in config.get("project_roots", []):
         if not isinstance(item, dict) or not item.get("enabled", True):
@@ -814,9 +915,10 @@ def build_inventory(config: dict[str, Any]) -> list[dict[str, Any]]:
             "enabled": bool(previous.get("enabled", True)),
             "preferred_ai": preferred_ai if preferred_ai in {"codex", "claude"} else None,
         }
-        # A deliberate refresh replaces technology and version edits. Project
-        # inclusion and AI routing remain user preferences and are preserved.
+        # A deliberate refresh replaces detected and manual inventory values.
+        # Project choices and separately evidenced production versions survive.
         result["manual_technologies"] = []
+        result["production_technologies"] = previous_production.get(str(project), [])
         inventory.append(result)
     return inventory
 
