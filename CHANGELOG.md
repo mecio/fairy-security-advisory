@@ -7,6 +7,10 @@ and the project intends to use [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- The interactive CLI splash now renders the `fAIry` name as ASCII art.
+
 ## [0.2.1] - 2026-11-18
 
 ### Added

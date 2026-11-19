@@ -480,10 +480,10 @@ Launch the service whenever setup, local maintenance, or analysis is needed:
 ./fairy-security-advisory
 ```
 
-Interactive CLI startup displays a terminal-safe ASCII rendition of the fAIry
-mascot and shield. ANSI colors are used only on an interactive terminal and can
-be disabled with the standard `NO_COLOR` environment variable. Direct actions,
-automation, redirected output, and `--gui` do not print the splash.
+Interactive CLI startup displays a terminal-safe ASCII `fAIry` wordmark. ANSI
+colors are used only on an interactive terminal and can be disabled with the
+standard `NO_COLOR` environment variable. Direct actions, automation,
+redirected output, and `--gui` do not print the splash.
 
 The available options are:
 

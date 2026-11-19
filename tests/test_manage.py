@@ -209,14 +209,16 @@ class AdvisorySourceRequestTest(unittest.TestCase):
 
     def test_cli_banner_is_plain_ascii_without_color(self) -> None:
         banner = render_cli_banner(color=False, width=100)
-        self.assertIn("fAIry Security Advisory", banner)
+        self.assertIn("/ _|  / \\  |_ _| _ __  _   _", banner)
+        self.assertIn("Security Advisory", banner)
         self.assertNotIn("\033", banner)
         self.assertTrue(all(ord(character) < 128 for character in banner))
         self.assertLessEqual(max(map(len, banner.splitlines())), 88)
 
     def test_cli_banner_has_a_compact_variant(self) -> None:
         banner = render_cli_banner(color=False, width=50)
-        self.assertIn("/AI\\", banner)
+        self.assertIn("/ _|  / \\  |_ _| _ __  _   _", banner)
+        self.assertNotIn("AI-assisted security intelligence", banner)
         self.assertLessEqual(len(banner.splitlines()), 10)
 
     def test_osv_querybatch_uses_post_with_an_empty_query_list(self) -> None:

@@ -157,40 +157,25 @@ AGENT_INSTALLATION = {
 }
 
 CLI_BANNER = r"""
-                 .       *                         .--------.
-        *             .-~~~~~-.          . . .---|   +    |
-                   .-'   .-.   '-.        *       |  /AI\  |
-          .-._   .'     (o o)     '.   _.-.       |  \__/  |
-       .-'    '-/        \^/        \-'    '-.    '--------'
-      (    .--. |      .-/|\-.      | .--.    )        *
-       '._/    \ \   .' / | \ '.   / /    \_.'
-          \     '._.'  /  |  \  '._.'     /
-       .---'._         /   |   \         _.'---.
-    .-'       '--._   /   / \   \   _.--'       '-.
-   /    _..--.     '-/___/   \___\-'     .--.._    \
-  ( _.-'      '._      /     \      _.'      '-._ )
-   '              '--._/       \_.--'              '
-                     /  .-~~~-.  \
-                    /.-'       '-.\
-                   //             \\
-                  /_\             /_\
-                    \             /
-                     '._       _.'
-                        '-----'
+            *       __    _    ___                         .
+                   / _|  / \  |_ _| _ __  _   _
+          .       | |_  / _ \  | | | '__|| | | |       *
+                  |  _|/ ___ \ | | | |   | |_| |
+              *   |_| /_/   \_\___||_|    \__, |   .
+                                            |___/
 
-                 fAIry Security Advisory
-             AI-assisted security intelligence
+                         Security Advisory
+                  AI-assisted security intelligence
 """.strip("\n")
 
 CLI_BANNER_COMPACT = r"""
-          *             .--------.
-     .-~~~~~-.    . .--|   +    |
- .-./  (o o)  \.-.     |  /AI\  |
-(   \   \^/   /   )    '--------'
- '-._'.-/|\-.'_.-'
-    '--/ | \--'
-      /_/ \_\
-       fAIry Security Advisory
+ __    _    ___
+/ _|  / \  |_ _| _ __  _   _
+| |_ / _ \  | | | '__|| | | |
+|  _/ ___ \ | | | |   | |_| |
+|_|/_/   \_\___||_|    \__, |
+                         |___/
+        Security Advisory
 """.strip("\n")
 
 
@@ -209,7 +194,7 @@ def render_cli_banner(*, color: bool | None = None, width: int | None = None) ->
     reset = "\033[0m"
     lines = banner.splitlines()
     return "\n".join(
-        f"{violet}{line}{reset}" if "fAIry Security Advisory" not in line
+        f"{violet}{line}{reset}" if "Security Advisory" not in line
         else f"{cyan}{line}{reset}"
         for line in lines
     )
