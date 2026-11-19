@@ -594,20 +594,35 @@ the date of an individual patch.
 Completed runs with any partial or failed baseline/source are archived as
 **completed-with-limitations**. If every selected baseline fails, the operation
 fails and the missing baselines remain selected for the next attempt.
+If the coordinator produces invalid staged reports, candidate ledger, or
+coverage receipt, the launcher returns the exact validation errors and permits
+one controlled correction attempt. The correction cannot broaden the analysis
+scope or publish directly to canonical reports. Both attempts remain visible in
+the run log and **correction-output.md**; a second validation failure ends the
+run without promoting the staged reports.
 
 The **Activity** tab opens with the prominent **fAIry at work** panel. It shows
-advisory sources and local projects
-flowing toward the fairy, then matching and reporting. Highlighted paths and
-sparkles follow the current operation: source checks light the advisory path,
-inventory refresh lights the project path, and a complete AI analysis changes
-phase as the coordinator emits routing, evidence, consolidation, and completion
-events. While collecting sources and project evidence the fairy faces those
-inputs. At matching time she turns toward **Match & verify**, waves her wand,
-and sends a sparkle trail to the matching stage. The animation illustrates the
-workflow; it is not a live network map or
-a percentage of files scanned. The phase, provider, elapsed time, and project
-count come from actual process events. Project counts advance at provider group
-boundaries. Switch to the separate **Detailed log** tab to give process output
+advisory sources and local projects flowing toward matching and reporting as an
+event-driven journey. The displayed phase, provider, project counters,
+validation attempt, and detail line come from real launcher milestones:
+release-metadata resolution, routing, provider evidence, consolidation,
+staging/ledger/receipt validation, controlled correction, report promotion,
+and checkpoint updates. It never invents per-file or model-internal progress.
+The fairy uses a distinct illustration for research, project evidence,
+consolidation, validation, correction, and routing; while idle she gently
+dozes in a four-frame loop.
+
+Choose **fAIry animation** on the Configuration page:
+
+- **Full** enables phase poses, flight, particles, sparkles, and spell trails.
+- **Reduced** keeps the phase pose and a slow subtle motion without particles.
+- **Disabled** keeps all truthful status details and a static illustration.
+
+Highlighted paths follow the current operation. In Full mode, source checks
+light the advisory path, inventory work lights the project path, and matching
+or correction sends a sparkle trail toward **Match & verify**. The panel is not
+a live network map or a percentage of files scanned. Project counts advance at
+provider group boundaries. Switch to the separate **Detailed log** tab to give process output
 the full page area while analysis continues. It is the place to read errors
 and evidence; **Clear log** only clears that on-screen view. You can return to
 **Activity** at any time without interrupting the check.

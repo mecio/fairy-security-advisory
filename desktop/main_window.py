@@ -326,6 +326,7 @@ class MainWindow(QMainWindow):
         self.report_paths: dict[int, Path] = {}
         self.log_run_files: list[Path] = []
         self.developer_tools_active = services.developer_tools_enabled()
+        self.work_animation_mode = services.work_animation_mode()
         self._build_interface()
         self.load_configuration()
         self.refresh_all()
@@ -529,6 +530,18 @@ class MainWindow(QMainWindow):
         self.config_mode_hint.setStyleSheet("color: #9fb4c8; padding-left: 8px;")
         mode_row.addWidget(self.config_mode_hint)
         mode_row.addStretch()
+        mode_row.addWidget(QLabel("fAIry animation"))
+        self.work_animation_combo = QComboBox()
+        self.work_animation_combo.addItem("Full", "full")
+        self.work_animation_combo.addItem("Reduced", "reduced")
+        self.work_animation_combo.addItem("Disabled", "disabled")
+        selected_animation = self.work_animation_combo.findData(self.work_animation_mode)
+        self.work_animation_combo.setCurrentIndex(max(0, selected_animation))
+        self.work_animation_combo.setToolTip(
+            "Choose full phase motion, reduced motion, or a static activity illustration."
+        )
+        self.work_animation_combo.currentIndexChanged.connect(self.set_work_animation_mode)
+        mode_row.addWidget(self.work_animation_combo)
         self.developer_tools_checkbox = QCheckBox("Developer tools")
         self.developer_tools_checkbox.setToolTip(
             "Show maintainer-only validation actions such as the pre-publication check."
@@ -746,6 +759,24 @@ class MainWindow(QMainWindow):
             self.prepublish_button.setVisible(enabled)
         self.statusBar().showMessage(
             "Developer tools enabled" if enabled else "Developer tools hidden", 5000,
+        )
+
+    def set_work_animation_mode(self, _index: int = -1) -> None:
+        mode = str(self.work_animation_combo.currentData() or "full")
+        try:
+            services.set_work_animation_mode(mode)
+        except (OSError, ValueError, services.ConfigurationError) as error:
+            self.work_animation_combo.blockSignals(True)
+            selected = self.work_animation_combo.findData(self.work_animation_mode)
+            self.work_animation_combo.setCurrentIndex(max(0, selected))
+            self.work_animation_combo.blockSignals(False)
+            QMessageBox.critical(self, "fAIry animation", str(error))
+            return
+        self.work_animation_mode = mode
+        if hasattr(self, "run_journey"):
+            self.run_journey.set_animation_mode(mode)
+        self.statusBar().showMessage(
+            f"fAIry animation mode: {self.work_animation_combo.currentText()}", 5000,
         )
 
     def configuration_tab_changed(self, index: int) -> None:
@@ -1266,7 +1297,8 @@ class MainWindow(QMainWindow):
         activity_page_layout.setContentsMargins(8, 10, 8, 8)
         activity_page_layout.setSpacing(8)
         self.run_journey = RunJourneyWidget(
-            services.ROOT / "desktop/assets/fairy-security-advisory-icon.png"
+            services.ROOT / "desktop/assets/fairy-security-advisory-icon.png",
+            animation_mode=self.work_animation_mode,
         )
         activity_page_layout.addWidget(self.run_journey, 1)
 
@@ -3140,13 +3172,14 @@ class MainWindow(QMainWindow):
 
     def _handle_analysis_progress(self, event: dict[str, object]) -> None:
         self.run_journey.progress(event)
-        phase = str(event.get("phase") or "analysis").replace("_", " ")
+        phase = str(event.get("phase") or "analysis").replace("_", " ").replace("-", " ")
         status = str(event.get("status") or "running")
         provider = str(event.get("provider") or "AI").title()
         completed = max(0, int(event.get("completed") or 0))
         total = max(0, int(event.get("total") or 0))
         active = max(0, int(event.get("active_projects") or 0))
         message = str(event.get("message") or phase.title())
+        detail = str(event.get("detail") or "")
 
         if total:
             completed = min(completed, total)
@@ -3159,6 +3192,8 @@ class MainWindow(QMainWindow):
         if active:
             noun = "project" if active == 1 else "projects"
             activity += f" · {active} {noun}"
+        if detail:
+            activity += f" · {detail}"
         self.analysis_activity_base = activity
         self._update_analysis_activity_clock()
         if status == "failed":

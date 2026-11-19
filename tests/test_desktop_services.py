@@ -19,6 +19,7 @@ from desktop.services import (
     analysis_run_entries, analysis_run_exclusions, analysis_run_files, assistant_command, delete_analysis_run,
     eula_accepted, extract_issue_update, project_metadata,
     followup_project_names, followup_source_links, proposal_changes, security_statistics,
+    set_work_animation_mode,
     update_followup_activity,
     read_analysis_run_file, restore_factory_configuration, validate_config_text,
     write_config_text, update_manual_technologies, technology_names,
@@ -27,10 +28,35 @@ from desktop.services import (
     update_project_technologies,
     update_inventory_preferences,
     write_technology_selection,
+    work_animation_mode,
 )
 
 
 class DesktopConfigurationServicesTest(unittest.TestCase):
+    def test_work_animation_mode_is_validated_and_saved_privately(self) -> None:
+        with TemporaryDirectory() as directory:
+            config = Path(directory) / "config"
+            config.mkdir()
+            (config / "application.yaml").write_text(
+                "schema_version: 1\napplication:\n  work_animation_mode: full\n",
+                encoding="utf-8",
+            )
+            local = config / "local/application.yaml"
+            with patch("desktop.services.CONFIG_DIR", config), patch(
+                "desktop.services.LOCAL_CONFIG_DIR", config / "local",
+            ), patch("desktop.services.LOCAL_APPLICATION_CONFIG", local):
+                self.assertEqual(work_animation_mode(), "full")
+                set_work_animation_mode("reduced")
+                self.assertEqual(work_animation_mode(), "reduced")
+                with self.assertRaisesRegex(ConfigurationError, "Unsupported"):
+                    set_work_animation_mode("dizzy")
+            self.assertEqual(
+                yaml.safe_load(local.read_text(encoding="utf-8"))["application"][
+                    "work_animation_mode"
+                ],
+                "reduced",
+            )
+
     def test_technology_version_assistant_uses_read_only_context(self) -> None:
         context = technology_version_assistant_context(
             {"id": "api", "path": "/projects/api"},
@@ -230,6 +256,9 @@ class DesktopConfigurationServicesTest(unittest.TestCase):
                 encoding="utf-8",
             )
             (run / "run.log").write_text("START\nFINISH\n", encoding="utf-8")
+            (run / "correction-output.md").write_text(
+                "Corrected rejected artifacts.\n", encoding="utf-8",
+            )
             (run / "candidate-ledger.json").write_text(json.dumps({"schema_version": 1, "candidates": [{
                 "advisory_id": "CVE-TEST-1", "project_id": "legacy", "declared_value": ">=7.2",
                 "decision": "not-applicable", "decision_reason": "Confirmed absent prerequisite",
@@ -245,7 +274,10 @@ class DesktopConfigurationServicesTest(unittest.TestCase):
             self.assertEqual(entries[0]["year"], "2026")
             self.assertEqual(entries[0]["month"], "11")
             self.assertEqual(entries[0]["status"], "completed")
-            self.assertEqual([path.name for path in files], ["run-summary.txt", "run.log", "candidate-ledger.json"])
+            self.assertEqual([path.name for path in files], [
+                "run-summary.txt", "run.log", "correction-output.md",
+                "candidate-ledger.json",
+            ])
             self.assertEqual(exclusions[0]["reason"], "Confirmed absent prerequisite")
             self.assertEqual(content, "START\nFINISH\n")
             self.assertEqual(removed, "20261116T180000Z-42")

@@ -4,6 +4,8 @@ schema_version: 1
 # Git-ignored config/local/application.yaml override.
 application:
   developer_tools: false
+  # full: phase motion and particles; reduced: subtle motion; disabled: static.
+  work_animation_mode: full
   eula:
     # Increment this value only when the versioned EULA.md notice changes in a
     # way that requires users to acknowledge it again. Acceptance is local.

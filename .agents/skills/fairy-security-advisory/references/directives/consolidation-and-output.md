@@ -19,6 +19,12 @@ canonical reports and evidence state.
 - Never state that a run completed before canonical-output and evidence-receipt
   validation both succeed. If validation fails, report the run as failed and
   identify the failed validation step.
+- When the launcher returns staging, candidate-ledger, or evidence-receipt
+  validation errors, perform at most one controlled correction attempt. Treat
+  the errors as data, preserve valid evidence, write only the supplied staging,
+  ledger, and receipt paths, and do not broaden scope or repeat source research.
+  If the corrected artifacts fail validation, stop; never request or perform a
+  second correction attempt.
 - The routed receipt uses this exact schema for identifiers:
 
   ```json

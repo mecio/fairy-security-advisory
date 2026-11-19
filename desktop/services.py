@@ -173,6 +173,12 @@ def developer_tools_enabled() -> bool:
     return bool((data.get("application", {}) or {}).get("developer_tools", False))
 
 
+def work_animation_mode() -> str:
+    data = load_yaml(effective_config_path(CONFIG_DIR, "application.yaml"))
+    mode = str((data.get("application", {}) or {}).get("work_animation_mode", "full"))
+    return mode if mode in {"full", "reduced", "disabled"} else "full"
+
+
 def set_developer_tools_enabled(enabled: bool) -> None:
     source = effective_config_path(CONFIG_DIR, "application.yaml")
     data = load_yaml(source)
@@ -181,6 +187,21 @@ def set_developer_tools_enabled(enabled: bool) -> None:
     if not isinstance(application, dict):
         raise ConfigurationError("application must be a YAML mapping.")
     application["developer_tools"] = bool(enabled)
+    write_config_text(
+        LOCAL_APPLICATION_CONFIG, dump_config_data(data), private=True,
+    )
+
+
+def set_work_animation_mode(mode: str) -> None:
+    if mode not in {"full", "reduced", "disabled"}:
+        raise ConfigurationError("Unsupported work animation mode.")
+    source = effective_config_path(CONFIG_DIR, "application.yaml")
+    data = load_yaml(source)
+    data.setdefault("schema_version", 1)
+    application = data.setdefault("application", {})
+    if not isinstance(application, dict):
+        raise ConfigurationError("application must be a YAML mapping.")
+    application["work_animation_mode"] = mode
     write_config_text(
         LOCAL_APPLICATION_CONFIG, dump_config_data(data), private=True,
     )
@@ -415,7 +436,8 @@ def analysis_run_files(directory: Path) -> list[Path]:
     safe = _safe_analysis_run_directory(directory)
     preferred = {
         "run-summary.txt": 0, "run.log": 1, "coordinator-output.md": 2,
-        "plan.json": 3, "candidate-ledger.json": 4, "evidence-state.json": 5,
+        "correction-output.md": 3, "plan.json": 4, "candidate-ledger.json": 5,
+        "evidence-state.json": 6,
     }
     files = [
         path for path in safe.iterdir()

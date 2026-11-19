@@ -9,11 +9,12 @@ from unittest.mock import patch
 
 from scripts.manage import (
     ANALYSIS_PROGRESS_PREFIX, ROOT, ai_command, analysis_prompt, consolidation_prompt,
+    correction_prompt,
     consume_technology_selection, coverage_completion_status, emit_analysis_progress,
     prepare_analysis_service, refresh_inventory,
     render_cli_banner, run_ai_check,
     scoped_evidence_prompt, source_request, validate_canonical_report_updates,
-    promote_staged_reports, staged_report_paths,
+    promote_staged_reports, staged_report_paths, validate_staged_analysis_artifacts,
 )
 from scripts.sandbox_preflight import claude_sandbox_settings
 
@@ -190,13 +191,39 @@ class AdvisorySourceRequestTest(unittest.TestCase):
             )
             self.assertTrue(valid)
 
+    def test_artifact_validation_aggregates_staging_ledger_and_receipt_errors(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            paths = {
+                "daily report": root / "daily.md",
+                "summary": root / "summary.md",
+                "follow-up": root / "followup.md",
+            }
+            for path in paths.values():
+                path.write_text("unchanged\n", encoding="utf-8")
+            from scripts.manage import report_signature
+            before = {name: report_signature(path) for name, path in paths.items()}
+
+            valid, detail, baselines, sources = validate_staged_analysis_artifacts(
+                paths, before, root / "missing-ledger.json",
+                root / "missing-receipt.json", [], [], [], {},
+                expected_project_ids=[], prior_daily_text=None,
+            )
+
+        self.assertFalse(valid)
+        self.assertIn("staging: not updated: daily report, summary", detail)
+        self.assertIn("candidate ledger:", detail)
+        self.assertIn("evidence receipt:", detail)
+        self.assertEqual((baselines, sources), ({}, []))
+
     @patch.dict("os.environ", {"FAIRY_GUI_PROGRESS": "1"})
     @patch("builtins.print")
     def test_analysis_progress_event_is_machine_readable(self, output) -> None:
         emit_analysis_progress(
             phase="evidence", status="running", provider="claude",
             completed=2, total=5, active_projects=3,
-            message="Collecting read-only evidence",
+            message="Collecting read-only evidence", detail="Provider dossier",
+            attempt=1, max_attempts=2,
         )
 
         line = output.call_args.args[0]
@@ -205,6 +232,8 @@ class AdvisorySourceRequestTest(unittest.TestCase):
         self.assertEqual(event["provider"], "claude")
         self.assertEqual(event["completed"], 2)
         self.assertEqual(event["active_projects"], 3)
+        self.assertEqual(event["detail"], "Provider dossier")
+        self.assertEqual((event["attempt"], event["max_attempts"]), (1, 2))
         self.assertTrue(output.call_args.kwargs["flush"])
 
     def test_cli_banner_is_plain_ascii_without_color(self) -> None:
@@ -328,6 +357,129 @@ class AdvisorySourceRequestTest(unittest.TestCase):
         self.assertIn("not `technology_key`", prompt)
         self.assertIn('"id":"<source ID>"', prompt)
         self.assertIn("not `source_id`", prompt)
+
+    def test_correction_prompt_is_single_attempt_and_path_scoped(self) -> None:
+        prompt = correction_prompt(
+            "codex", Path("run/plan.json"), Path("run/coordinator-output.md"),
+            Path("run/candidate-ledger.json"), Path("run/evidence-state.json"),
+            {"daily report": Path("run/staging/daily.md")},
+            "evidence receipt: missing source acn", "economical",
+        )
+        self.assertIn("one and only controlled correction attempt", prompt)
+        self.assertIn("evidence receipt: missing source acn", prompt)
+        self.assertIn("run/staging/daily.md", prompt)
+        self.assertIn("no further correction attempt", prompt)
+        self.assertIn("Do not start a new analysis", prompt)
+
+    def _run_receipt_correction_case(
+        self, fix_on_retry: bool,
+    ) -> tuple[int, int, str, str, str, list[dict[str, object]]]:
+        config = {"inventory": {"projects": [{
+            "id": "api", "path": "/projects/api",
+            "advisory_checks": {"enabled": True, "preferred_ai": None},
+        }]}}
+        command_prompts: list[str] = []
+        progress_events: list[dict[str, object]] = []
+        invocations = 0
+
+        def command(provider, *_args, **kwargs):
+            command_prompts.append(str(kwargs.get("prompt", "")))
+            return [provider, "run"]
+
+        def tracked(_command, _provider, **kwargs):
+            nonlocal invocations
+            invocations += 1
+            capture = kwargs["capture_path"]
+            capture.parent.mkdir(parents=True, exist_ok=True)
+            capture.write_text(f"AI output {invocations}\n", encoding="utf-8")
+            staging = capture.parent / "staging"
+            staging.mkdir(parents=True, exist_ok=True)
+            (staging / "daily.md").write_text(
+                "# Daily\n\n## Projects and technologies involved\n"
+                "- Project: `api` — checked.\n", encoding="utf-8",
+            )
+            (staging / "summary.md").write_text("updated summary\n", encoding="utf-8")
+            (staging / "followup.md").write_text("updated follow-up\n", encoding="utf-8")
+            (capture.parent / "candidate-ledger.json").write_text(
+                '{"schema_version":1,"candidates":[]}', encoding="utf-8",
+            )
+            receipt = (
+                '{"schema_version":1,"baselines":[],"sources":[]}'
+                if invocations == 2 and fix_on_retry
+                else '{"schema_version":1,"baselines":[]}'
+            )
+            (capture.parent / "evidence-state.json").write_text(
+                receipt, encoding="utf-8",
+            )
+            return 0
+
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            canonical = {
+                "daily report": root / "canonical/daily.md",
+                "summary": root / "canonical/summary.md",
+                "follow-up": root / "canonical/followup.md",
+            }
+            with patch("scripts.manage.ROOT", root), patch(
+                "scripts.manage.prepare_analysis_service", return_value=True,
+            ), patch(
+                "scripts.manage.configured_models",
+                return_value=("balanced", {"codex": "codex-model", "claude": "claude-model"}),
+            ), patch(
+                "scripts.manage.configured_execution",
+                return_value=("economical", {"use_subagents": False, "max_subagents": 0}),
+            ), patch(
+                "scripts.manage.safe_load_yaml", return_value=config,
+            ), patch(
+                "scripts.manage.canonical_report_paths", return_value=canonical,
+            ), patch(
+                "scripts.manage.resolve_release_metadata", return_value={},
+            ), patch(
+                "scripts.manage.ai_command", side_effect=command,
+            ), patch(
+                "scripts.manage.run_tracked_command", side_effect=tracked,
+            ), patch(
+                "scripts.manage.emit_analysis_progress",
+                side_effect=lambda **event: progress_events.append(event),
+            ), patch(
+                "scripts.manage.archive_closed_followups", return_value={"archived": 0},
+            ):
+                result = run_ai_check(
+                    "codex", "balanced", "economical", assume_yes=True,
+                    non_interactive=True,
+                )
+            summary_path = next((root / "output/analysis-runs").rglob("run-summary.txt"))
+            summary = summary_path.read_text(encoding="utf-8")
+            event_log = (summary_path.parent / "run.log").read_text(encoding="utf-8")
+        return result, invocations, command_prompts[-1], summary, event_log, progress_events
+
+    def test_invalid_receipt_gets_one_successful_controlled_correction(self) -> None:
+        result, invocations, prompt, summary, event_log, events = (
+            self._run_receipt_correction_case(True)
+        )
+        self.assertEqual((result, invocations), (0, 2))
+        self.assertIn("evidence receipt:", prompt)
+        self.assertIn("Phase: codex correction — completed (exit 0)", summary)
+        self.assertIn("Correction output: correction-output.md", summary)
+        self.assertIn("OUTPUT_VALIDATION status=failed attempt=1", event_log)
+        self.assertIn("OUTPUT_VALIDATION status=completed attempt=2", event_log)
+        phases = [str(event["phase"]) for event in events]
+        self.assertLess(phases.index("validation"), phases.index("correction"))
+        self.assertEqual(phases.count("validation"), 2)
+        self.assertIn("promotion", phases)
+        self.assertIn("state-update", phases)
+        correction = next(event for event in events if event["phase"] == "correction")
+        self.assertEqual((correction["attempt"], correction["max_attempts"]), (1, 1))
+
+    def test_invalid_receipt_is_not_retried_more_than_once(self) -> None:
+        result, invocations, _prompt, summary, event_log, events = (
+            self._run_receipt_correction_case(False)
+        )
+        self.assertEqual((result, invocations), (2, 2))
+        self.assertIn("Status: failed", summary)
+        self.assertEqual(event_log.count("type=correction attempt=1"), 2)
+        self.assertNotIn("attempt=3", event_log)
+        self.assertNotIn("promotion", [event["phase"] for event in events])
 
     @patch("scripts.manage.prepare_analysis_service", return_value=True)
     @patch("scripts.manage.check_prerequisites", return_value=0)

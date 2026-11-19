@@ -620,6 +620,54 @@ class DesktopWindowTest(unittest.TestCase):
         journey.deleteLater()
         application.processEvents()
 
+    def test_run_journey_uses_phase_art_and_respects_motion_modes(self) -> None:
+        application = QApplication.instance() or QApplication([])
+        journey = RunJourneyWidget(
+            services.ROOT / "desktop/assets/fairy-security-advisory-icon.png",
+            animation_mode="full",
+        )
+        self.assertFalse(journey.idle_sprite.isNull())
+        self.assertTrue(journey.timer.isActive())
+        first_source = journey._phase_pixmap()[1]
+        for _ in range(8):
+            journey._advance()
+        self.assertNotEqual(journey._phase_pixmap()[1], first_source)
+
+        journey.start("ai-check")
+        journey.progress({
+            "phase": "validation", "status": "running", "provider": "codex",
+            "detail": "3 staged reports · candidate ledger · coverage receipt",
+            "attempt": 1, "max_attempts": 2,
+        })
+        self.assertEqual(journey.phase, "validation")
+        self.assertEqual(journey._active_edges(), {"matching", "reports"})
+        self.assertFalse(journey._phase_icon().isNull())
+        self.assertEqual((journey.attempt, journey.max_attempts), (1, 2))
+
+        journey.set_animation_mode("reduced")
+        self.assertTrue(journey.timer.isActive())
+        self.assertEqual(journey.timer.interval(), 240)
+        journey.set_animation_mode("disabled")
+        self.assertFalse(journey.timer.isActive())
+        with self.assertRaisesRegex(ValueError, "Unsupported"):
+            journey.set_animation_mode("fast-and-dizzy")
+        journey.close()
+        journey.deleteLater()
+        application.processEvents()
+
+    def test_animation_preference_updates_the_live_journey(self) -> None:
+        application = QApplication.instance() or QApplication([])
+        window = MainWindow()
+        reduced = window.work_animation_combo.findData("reduced")
+        with patch("desktop.main_window.services.set_work_animation_mode") as save:
+            window.work_animation_combo.setCurrentIndex(reduced)
+        save.assert_called_once_with("reduced")
+        self.assertEqual(window.work_animation_mode, "reduced")
+        self.assertEqual(window.run_journey.animation_mode, "reduced")
+        window.close()
+        window.deleteLater()
+        application.processEvents()
+
     def test_sandbox_terminal_handoff_closes_gui_only_after_successful_launch(self) -> None:
         application = QApplication.instance() or QApplication([])
         plan = {

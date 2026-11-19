@@ -141,6 +141,14 @@ def main() -> int:
     )
     if not isinstance(developer_tools, bool):
         fail("application.developer_tools must be a boolean", errors)
+    animation_mode = (application_config.get("application", {}) or {}).get(
+        "work_animation_mode", "full",
+    )
+    if animation_mode not in {"full", "reduced", "disabled"}:
+        fail(
+            "application.work_animation_mode must be full, reduced, or disabled",
+            errors,
+        )
     eula = (factory_application_config.get("application", {}) or {}).get("eula", {})
     if not isinstance(eula, dict):
         fail("application.eula must be a mapping", errors)
