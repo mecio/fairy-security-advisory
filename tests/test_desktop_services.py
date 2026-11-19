@@ -16,9 +16,11 @@ import yaml
 from desktop.services import (
     ConfigurationError, accept_eula, agent_authentication, agent_usage_status, analysis_routing,
     archive_and_reset_reports, assistant_prompt,
-    analysis_run_entries, analysis_run_exclusions, analysis_run_files, assistant_command, delete_analysis_run,
+    analysis_run_candidate_summary, analysis_run_entries, analysis_run_exclusions,
+    analysis_run_files, assistant_command, delete_analysis_run,
     eula_accepted, extract_issue_update, project_metadata,
-    followup_project_names, followup_source_links, proposal_changes, security_statistics,
+    followup_match_assessment, followup_project_names, followup_source_links,
+    proposal_changes, security_statistics,
     set_work_animation_mode,
     update_followup_activity,
     read_analysis_run_file, restore_factory_configuration, validate_config_text,
@@ -262,11 +264,18 @@ class DesktopConfigurationServicesTest(unittest.TestCase):
             (run / "candidate-ledger.json").write_text(json.dumps({"schema_version": 1, "candidates": [{
                 "advisory_id": "CVE-TEST-1", "project_id": "legacy", "declared_value": ">=7.2",
                 "decision": "not-applicable", "decision_reason": "Confirmed absent prerequisite",
+                "match_score": 42, "confidence": "weak",
             }]}), encoding="utf-8")
+            (run / "candidate-intake.json").write_text(json.dumps({
+                "schema_version": 1, "sources": [], "candidates": [{
+                    "candidate_id": "source:CVE-TEST-1",
+                }],
+            }), encoding="utf-8")
             with patch("desktop.services.ANALYSIS_RUNS_DIR", root):
                 entries = analysis_run_entries()
                 files = analysis_run_files(run)
                 exclusions = analysis_run_exclusions(run)
+                candidate_summary = analysis_run_candidate_summary(run)
                 content = read_analysis_run_file(run / "run.log")
                 removed = delete_analysis_run(run)
 
@@ -276,9 +285,13 @@ class DesktopConfigurationServicesTest(unittest.TestCase):
             self.assertEqual(entries[0]["status"], "completed")
             self.assertEqual([path.name for path in files], [
                 "run-summary.txt", "run.log", "correction-output.md",
-                "candidate-ledger.json",
+                "candidate-intake.json", "candidate-ledger.json",
             ])
             self.assertEqual(exclusions[0]["reason"], "Confirmed absent prerequisite")
+            self.assertEqual(candidate_summary, {
+                "intake": 1, "ledger": 1, "confirmed": 0, "review": 0,
+                "weak": 1, "unscored": 0,
+            })
             self.assertEqual(content, "START\nFINISH\n")
             self.assertEqual(removed, "20261116T180000Z-42")
             self.assertFalse(run.exists())
@@ -374,6 +387,26 @@ class DesktopConfigurationServicesTest(unittest.TestCase):
             ("CVE-2026-1234", "https://www.cve.org/CVERecord?id=CVE-2026-1234"),
             ("CVE-2026-56789", "https://www.cve.org/CVERecord?id=CVE-2026-56789"),
         ])
+
+    def test_followup_assessment_uses_strongest_matching_candidate(self) -> None:
+        activity = {
+            "Issue title": "PHP2Shell runtime verification",
+            "Advisory / CVE": "AL07/261021/CSIRT-ITA; CVE-2026-109618",
+        }
+        assessment = followup_match_assessment(activity, [{
+            "advisory_id": "AL07/261021/CSIRT-ITA",
+            "identifiers": ["CVE-2026-109618"],
+            "match_score": 62,
+            "confidence": "review",
+            "score_breakdown": {"version_relation": 20},
+        }, {
+            "advisory_id": "CVE-2026-109618",
+            "match_score": 88,
+            "confidence": "confirmed",
+        }])
+        self.assertEqual(assessment["score"], 88)
+        self.assertEqual(assessment["confidence"], "confirmed")
+        self.assertEqual(assessment["candidate_count"], 2)
 
     @patch("desktop.services.subprocess.run")
     def test_claude_authentication_reads_only_logged_in_flag(self, run) -> None:

@@ -15,26 +15,34 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 try:
     from PySide6.QtCore import QProcess, QUrl
     from PySide6.QtCore import Qt
+    from PySide6.QtGui import QColor, QKeySequence, QPalette
     from PySide6.QtWidgets import (
-        QApplication, QComboBox, QDialog, QLabel, QMessageBox, QPushButton,
-        QTreeWidgetItem,
+        QApplication, QComboBox, QDialog, QHeaderView, QLabel, QMessageBox, QPushButton,
+        QToolTip, QTreeWidgetItem,
     )
     from desktop import services
     from desktop.eula_dialog import EulaDialog
     from desktop.inventory_technologies_dialog import InventoryTechnologiesDialog
-    from desktop.main_window import BarChartCard, MainWindow, PAGE_ASSISTANT, PAGE_RUN
+    from desktop.main_window import (
+        BarChartCard, MainWindow, PAGE_ASSISTANT, PAGE_REPORTS, PAGE_RUN,
+    )
     from desktop.run_visualization import RunJourneyWidget
 except ImportError:
     QApplication = None
     BarChartCard = None
     MainWindow = None
     PAGE_RUN = None
+    PAGE_REPORTS = None
     PAGE_ASSISTANT = None
     QLabel = None
     QPushButton = None
     QUrl = None
     QProcess = None
     QDialog = None
+    QHeaderView = None
+    QKeySequence = None
+    QPalette = None
+    QToolTip = None
     QTreeWidgetItem = None
     Qt = None
     EulaDialog = None
@@ -780,6 +788,8 @@ class DesktopWindowTest(unittest.TestCase):
                 )
                 self.assertIn("CVE-TEST-1", window.analysis_log_exclusions.text())
                 self.assertIn("Confirmed absent prerequisite", window.analysis_log_exclusions.text())
+                self.assertIn("ledger decisions 1", window.analysis_log_candidates.text())
+                self.assertIn("unscored 1", window.analysis_log_candidates.text())
                 self.assertTrue(window.delete_log_button.isEnabled())
                 with patch(
                     "desktop.main_window.QMessageBox.question",
@@ -1013,6 +1023,11 @@ class DesktopWindowTest(unittest.TestCase):
         window = MainWindow()
         window.show()
         application.processEvents()
+
+        self.assertEqual(
+            QToolTip.palette().color(QPalette.ColorRole.ToolTipText),
+            QColor("#f2f8ff"),
+        )
 
         self.assertEqual(window.pages.count(), 10)
         self.assertEqual(
@@ -1266,6 +1281,20 @@ class DesktopWindowTest(unittest.TestCase):
         reports_form = window.config_simple_forms[services.LOCAL_CONFIG_DIR / "reports.yaml"]
         self.assertTrue(reports_form.timezone.isReadOnly())
         self.assertEqual(reports_form.timezone.text(), "UTC")
+        self.assertEqual(reports_form.actionable_threshold.value(), 80)
+        self.assertEqual(reports_form.review_threshold.value(), 50)
+        reports_data = reports_form.apply_to(
+            services.validate_config_text(
+                window.config_editors[services.LOCAL_CONFIG_DIR / "reports.yaml"].toPlainText()
+            )
+        )
+        self.assertEqual(reports_data["reports"]["finding_presentation"], {
+            "actionable_threshold": 80,
+            "review_threshold": 50,
+            "collapse_below_threshold": 50,
+            "notify_below_threshold": False,
+            "show_weak_signals": False,
+        })
         window.close()
         window.deleteLater()
         application.processEvents()
@@ -1324,7 +1353,10 @@ class DesktopWindowTest(unittest.TestCase):
             activity_cell = window.followup_table.cellWidget(0, 0)
             open_buttons = window.followup_table.cellWidget(0, 6).findChildren(QPushButton)
             closed_buttons = window.followup_table.cellWidget(1, 6).findChildren(QPushButton)
-            self.assertEqual([button.text() for button in open_buttons], ["Set as solved", "AI chat"])
+            self.assertEqual(
+                [button.text() for button in open_buttons],
+                ["Solved", "Ignored", "AI chat"],
+            )
             self.assertIn(
                 "https://www.cve.org/CVERecord?id=CVE-2026-1234",
                 activity_cell.text(),
@@ -1332,7 +1364,21 @@ class DesktopWindowTest(unittest.TestCase):
             self.assertTrue(activity_cell.openExternalLinks())
             self.assertTrue(all(button.isEnabled() for button in open_buttons))
             self.assertEqual(open_buttons[0].property("variant"), "success")
-            self.assertEqual(open_buttons[1].property("variant"), "ai")
+            self.assertEqual(open_buttons[1].property("variant"), "warning")
+            self.assertEqual(open_buttons[2].property("variant"), "ai")
+            self.assertGreaterEqual(
+                open_buttons[0].minimumWidth(),
+                open_buttons[0].fontMetrics().horizontalAdvance("Solved") + 32,
+            )
+            self.assertEqual(
+                window.followup_table.horizontalHeader().sectionResizeMode(0),
+                QHeaderView.ResizeMode.Interactive,
+            )
+            self.assertGreaterEqual(window.followup_table.columnWidth(0), 320)
+            self.assertGreaterEqual(window.followup_table.columnWidth(6), 275)
+            self.assertEqual(
+                window.followup_table.cellWidget(0, 6).layout().spacing(), 12
+            )
             self.assertTrue(all(not button.isEnabled() for button in closed_buttons))
             followup.write_text(
                 "| ID | Issue title | Advisory / CVE | Project | Description | Priority | Owner | Status | Opened | Last updated | Next action | Due date | Completion evidence | Source URL |\n"
@@ -1344,6 +1390,12 @@ class DesktopWindowTest(unittest.TestCase):
             self.assertIn("PHP2Shell in PHP runtime", window.followup_table.cellWidget(0, 0).text())
             self.assertIn("CVE-2026-1234", window.followup_table.cellWidget(0, 0).text())
             self.assertIn("https://example.com/advisory", window.followup_table.cellWidget(0, 0).text())
+            self.assertGreaterEqual(window.followup_table.rowHeight(0), 110)
+            window.report_stack.setCurrentWidget(window.followup_table)
+            window.report_search.setText("PHP2Shell")
+            window.search_report_next()
+            self.assertEqual(window.followup_table.currentRow(), 0)
+            self.assertIn("Match 1 of 1", window.report_search_status.text())
 
             followup.write_text(
                 "| ID | Advisory / CVE | Project | Description | Priority | Owner | Status | Opened | Last updated | Next action | Due date | Completion evidence |\n"
@@ -1354,6 +1406,124 @@ class DesktopWindowTest(unittest.TestCase):
             window.load_followup_table(followup)
             self.assertEqual(window.followup_table.rowCount(), 1)
             self.assertEqual(window.followup_table.item(0, 1).text(), "api\nworker")
+        window.close()
+        window.deleteLater()
+        application.processEvents()
+
+    def test_report_search_supports_ctrl_f_navigation_and_wrapping(self) -> None:
+        application = QApplication.instance() or QApplication([])
+        window = MainWindow()
+        window._navigate_to_page(PAGE_REPORTS)
+        window.show()
+        application.processEvents()
+
+        with TemporaryDirectory() as directory:
+            report = Path(directory) / "report.md"
+            report.write_text(
+                "# Example\n\nFirst security needle.\n\nSecond security needle.\n",
+                encoding="utf-8",
+            )
+            window.report_paths[0] = report
+            window.show_report(0)
+            window.report_search.setText("security needle")
+            window.search_report_next()
+            self.assertEqual(
+                window.report_viewer.textCursor().selectedText().casefold(),
+                "security needle",
+            )
+            highlights = window.report_viewer.extraSelections()
+            self.assertEqual(len(highlights), 1)
+            self.assertEqual(
+                highlights[0].format.background().color(), QColor("#ffd166")
+            )
+            self.assertEqual(
+                highlights[0].format.foreground().color(), QColor("#081426")
+            )
+            window.search_report_next()
+            self.assertIn("next match", window.report_search_status.text())
+            window.report_find_shortcut.activated.emit()
+            self.assertTrue(window.report_search.hasFocus())
+            self.assertEqual(
+                window.report_find_shortcut.key().matches(
+                    QKeySequence(QKeySequence.StandardKey.Find)
+                ),
+                QKeySequence.SequenceMatch.ExactMatch,
+            )
+        window.close()
+        window.deleteLater()
+        application.processEvents()
+
+    def test_followup_confidence_badge_and_filters_are_presentation_only(self) -> None:
+        application = QApplication.instance() or QApplication([])
+        window = MainWindow()
+        with TemporaryDirectory() as directory:
+            followup = Path(directory) / "followup.md"
+            followup.write_text(
+                "| ID | Advisory / CVE | Project | Description | Priority | Owner | Status | Opened | Last updated | Next action | Due date | Completion evidence |\n"
+                "|---|---|---|---|---|---|---|---|---|---|---|---|\n"
+                "| A-1 | CVE-2026-109618 | api | Verify | Medium | Dev | Open | 2026-11-01 | 2026-11-01 | Review | — | — |\n",
+                encoding="utf-8",
+            )
+            candidates = [{
+                "advisory_id": "AL07/261021/CSIRT-ITA",
+                "identifiers": ["CVE-2026-109618"],
+                "match_score": 62,
+                "confidence": "review",
+                "score_breakdown": {"version_relation": 20},
+            }]
+            with patch(
+                "desktop.main_window.services.latest_candidate_assessments",
+                return_value=candidates,
+            ), patch(
+                "desktop.main_window.services.reports_config",
+                return_value={"finding_presentation": {"collapse_below_threshold": 50}},
+            ):
+                window.load_followup_table(followup)
+                activity = window.followup_table.cellWidget(0, 0)
+                self.assertIn("Needs review · 62%", activity.text())
+                self.assertEqual(activity.property("confidence"), "review")
+                self.assertFalse(window.followup_table.isRowHidden(0))
+
+                window.followup_confidence_filter.setCurrentIndex(
+                    window.followup_confidence_filter.findData("confirmed")
+                )
+                self.assertTrue(window.followup_table.isRowHidden(0))
+                window.followup_confidence_filter.setCurrentIndex(
+                    window.followup_confidence_filter.findData("review")
+                )
+                self.assertFalse(window.followup_table.isRowHidden(0))
+                self.assertIn("never removed", window.followup_confidence_filter.toolTip())
+        window.close()
+        window.deleteLater()
+        application.processEvents()
+
+    def test_ignore_followup_requires_reason_and_archives_the_activity(self) -> None:
+        application = QApplication.instance() or QApplication([])
+        window = MainWindow()
+        issue = {"ID": "A-1", "Project": "api", "Status": "Open"}
+        with patch(
+            "desktop.main_window.services.open_followup_activities", return_value=[issue],
+        ), patch(
+            "desktop.main_window.QInputDialog.getMultiLineText",
+            return_value=("Duplicate of the platform activity", True),
+        ), patch(
+            "desktop.main_window.QMessageBox.question",
+            return_value=QMessageBox.StandardButton.Yes,
+        ), patch(
+            "desktop.main_window.services.update_followup_activity",
+        ) as update, patch(
+            "desktop.main_window.services.archive_closed_followups",
+        ) as archive, patch.object(
+            window, "refresh_all",
+        ), patch("desktop.main_window.QMessageBox.information"):
+            window.set_followup_ignored("A-1")
+
+        update.assert_called_once_with("A-1", {
+            "Status": "Ignored",
+            "Next action": "No further action",
+            "Completion evidence": "Duplicate of the platform activity",
+        })
+        archive.assert_called_once_with(services.ROOT)
         window.close()
         window.deleteLater()
         application.processEvents()

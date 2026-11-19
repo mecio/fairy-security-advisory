@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 from scripts.manage import (
     ANALYSIS_PROGRESS_PREFIX, ROOT, ai_command, analysis_prompt, consolidation_prompt,
-    correction_prompt,
+    candidate_intake_prompt, correction_prompt,
     consume_technology_selection, coverage_completion_status, emit_analysis_progress,
     prepare_analysis_service, refresh_inventory,
     render_cli_banner, run_ai_check,
@@ -206,7 +206,8 @@ class AdvisorySourceRequestTest(unittest.TestCase):
 
             valid, detail, baselines, sources = validate_staged_analysis_artifacts(
                 paths, before, root / "missing-ledger.json",
-                root / "missing-receipt.json", [], [], [], {},
+                root / "missing-intake.json", root / "missing-receipt.json",
+                [], [], [], {},
                 expected_project_ids=[], prior_daily_text=None,
             )
 
@@ -344,6 +345,10 @@ class AdvisorySourceRequestTest(unittest.TestCase):
         prompts = (
             analysis_prompt("codex", "economical"),
             scoped_evidence_prompt("claude", [{"id": "api", "path": "/projects/api"}]),
+            candidate_intake_prompt(
+                "codex", Path("output/analysis-runs/plan.json"), [],
+                Path("output/analysis-runs/candidate-intake.json"), [],
+            ),
             consolidation_prompt("codex", Path("output/analysis-runs/plan.json"), []),
         )
         for prompt in prompts:
@@ -357,6 +362,16 @@ class AdvisorySourceRequestTest(unittest.TestCase):
         self.assertIn("not `technology_key`", prompt)
         self.assertIn('"id":"<source ID>"', prompt)
         self.assertIn("not `source_id`", prompt)
+
+    def test_candidate_intake_prompt_preserves_exact_php2shell_identity(self) -> None:
+        prompt = candidate_intake_prompt(
+            "codex", Path("run/plan.json"), [Path("run/claude-evidence.md")],
+            Path("run/candidate-intake.json"), [{"id": "acn-alert-bollettini"}],
+        )
+        self.assertIn("CVE-2026-109618", prompt)
+        self.assertIn("four or more digits", prompt)
+        self.assertIn("Do not create generic replacements", prompt)
+        self.assertIn("every CVE", prompt)
 
     def test_correction_prompt_is_single_attempt_and_path_scoped(self) -> None:
         prompt = correction_prompt(
@@ -392,6 +407,12 @@ class AdvisorySourceRequestTest(unittest.TestCase):
             capture = kwargs["capture_path"]
             capture.parent.mkdir(parents=True, exist_ok=True)
             capture.write_text(f"AI output {invocations}\n", encoding="utf-8")
+            if capture.name == "candidate-discovery-output.md":
+                (capture.parent / "candidate-intake.json").write_text(
+                    '{"schema_version":1,"sources":[],"candidates":[]}',
+                    encoding="utf-8",
+                )
+                return 0
             staging = capture.parent / "staging"
             staging.mkdir(parents=True, exist_ok=True)
             (staging / "daily.md").write_text(
@@ -401,11 +422,11 @@ class AdvisorySourceRequestTest(unittest.TestCase):
             (staging / "summary.md").write_text("updated summary\n", encoding="utf-8")
             (staging / "followup.md").write_text("updated follow-up\n", encoding="utf-8")
             (capture.parent / "candidate-ledger.json").write_text(
-                '{"schema_version":1,"candidates":[]}', encoding="utf-8",
+                '{"schema_version":1,"sources":[],"candidates":[]}', encoding="utf-8",
             )
             receipt = (
                 '{"schema_version":1,"baselines":[],"sources":[]}'
-                if invocations == 2 and fix_on_retry
+                if capture.name == "correction-output.md" and fix_on_retry
                 else '{"schema_version":1,"baselines":[]}'
             )
             (capture.parent / "evidence-state.json").write_text(
@@ -457,7 +478,7 @@ class AdvisorySourceRequestTest(unittest.TestCase):
         result, invocations, prompt, summary, event_log, events = (
             self._run_receipt_correction_case(True)
         )
-        self.assertEqual((result, invocations), (0, 2))
+        self.assertEqual((result, invocations), (0, 3))
         self.assertIn("evidence receipt:", prompt)
         self.assertIn("Phase: codex correction — completed (exit 0)", summary)
         self.assertIn("Correction output: correction-output.md", summary)
@@ -475,7 +496,7 @@ class AdvisorySourceRequestTest(unittest.TestCase):
         result, invocations, _prompt, summary, event_log, events = (
             self._run_receipt_correction_case(False)
         )
-        self.assertEqual((result, invocations), (2, 2))
+        self.assertEqual((result, invocations), (2, 3))
         self.assertIn("Status: failed", summary)
         self.assertEqual(event_log.count("type=correction attempt=1"), 2)
         self.assertNotIn("attempt=3", event_log)
@@ -513,6 +534,12 @@ class AdvisorySourceRequestTest(unittest.TestCase):
             if capture:
                 capture.parent.mkdir(parents=True, exist_ok=True)
                 capture.write_text("# Evidence\n", encoding="utf-8")
+            if capture and capture.name == "candidate-discovery-output.md":
+                (capture.parent / "candidate-intake.json").write_text(
+                    '{"schema_version":1,"sources":[],"candidates":[]}',
+                    encoding="utf-8",
+                )
+                return 0
             if provider == "codex":
                 staging = capture.parent / "staging"
                 for name, canonical in canonical_paths.items():
@@ -530,7 +557,7 @@ class AdvisorySourceRequestTest(unittest.TestCase):
                     encoding="utf-8",
                 )
                 (capture.parent / "candidate-ledger.json").write_text(
-                    '{"schema_version":1,"candidates":[]}', encoding="utf-8",
+                    '{"schema_version":1,"sources":[],"candidates":[]}', encoding="utf-8",
                 )
             return 0
 
@@ -569,14 +596,18 @@ class AdvisorySourceRequestTest(unittest.TestCase):
         self.assertIn("Codex model: codex-model", summary)
         self.assertIn("Claude model: claude-model", summary)
         self.assertIn("Phase: claude evidence — completed (exit 0)", summary)
+        self.assertIn("Phase: codex candidate discovery — completed (exit 0)", summary)
         self.assertIn("Phase: codex consolidation — completed (exit 0)", summary)
         self.assertIn("type=evidence status=completed", event_log)
         self.assertIn("type=consolidation status=completed", event_log)
         self.assertIn("OUTPUT_VALIDATION status=completed", event_log)
         prerequisites.assert_called_once_with("claude")
-        self.assertEqual([call.args[1] for call in run.call_args_list], ["claude", "codex"])
+        self.assertEqual(
+            [call.args[1] for call in run.call_args_list], ["claude", "codex", "codex"],
+        )
         self.assertTrue(command.call_args_list[0].kwargs["read_only"])
         self.assertNotIn("read_only", command.call_args_list[1].kwargs)
+        self.assertNotIn("read_only", command.call_args_list[2].kwargs)
 
     @patch("builtins.print")
     @patch("scripts.manage.run_command")

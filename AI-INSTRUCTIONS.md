@@ -178,6 +178,13 @@ Reports are informational and must never change inventory versions.
 Perform deterministic package/version and affected-range matching first. Use AI
 judgment only for ambiguous identity, prerequisites, reachability, or incomplete
 evidence; unresolved cases belong in the report for human review.
+Freeze source discoveries in the launcher-supplied candidate intake before
+consolidation. Preserve every candidate ID, exact bulletin/advisory ID, source
+record, and CVE/GHSA identifier through the applicability ledger and staged
+reports. CVE serials contain four or more digits after the year; length alone
+is never evidence that an identifier is invalid. The launcher computes the
+correspondence score deterministically. Configured thresholds affect display
+and notifications only and never remove a candidate or change applicability.
 In routed mode, account for every selected baseline and active source in the
 machine-readable evidence receipt requested by the launcher. Reachability alone
 never makes source coverage complete. A completed baseline receipt records its

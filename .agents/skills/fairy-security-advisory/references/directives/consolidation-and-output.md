@@ -13,6 +13,10 @@ canonical reports and evidence state.
 - Before writing the final reports, reconcile the applicability ledger against
   the daily report and follow-up: every retained candidate has a decision, and
   every `not-applicable` decision has recorded range/prerequisite evidence.
+- Treat the candidate intake as immutable input. The ledger must account for
+  every intake candidate across every in-scope project/technology pair and its
+  source-status list must exactly match the intake. Never delete, rename, or
+  replace an intake identity during consolidation.
 - In a routed run, write reports only to the staging paths supplied by the
   launcher. The launcher validates the staged daily report, follow-up, ledger,
   and receipt before atomically promoting the reports to their canonical paths.
@@ -25,6 +29,11 @@ canonical reports and evidence state.
   ledger, and receipt paths, and do not broaden scope or repeat source research.
   If the corrected artifacts fail validation, stop; never request or perform a
   second correction attempt.
+- The launcher's deterministic score and confidence band are annotations, not
+  suppression rules. Low-confidence and `not-applicable` candidates remain in
+  the ledger and daily report with neutral wording and their verification or
+  exclusion reason. Configured thresholds may collapse or filter presentation
+  and may mute notifications, but may not remove evidence.
 - The routed receipt uses this exact schema for identifiers:
 
   ```json

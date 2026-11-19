@@ -460,12 +460,22 @@ no source URL is recorded, recognized CVE identifiers link
 to their official CVE records. Opening a link launches the system browser and
 does not change the activity.
 
+For findings linked to the newest candidate ledger, the same cell shows a
+deterministic correspondence percentage and one of **Confirmed**, **Needs
+review**, or **Weak signal**. The calculation keeps advisory identity, source
+quality, version relation, prerequisites, and source extraction separate from
+severity. Use the confidence selector to show one band, the configured default,
+or **All confidence**. Filtering and the configured collapse threshold never
+delete intake or ledger records.
+
 Available actions are deliberately tied to the stable issue ID:
 
-- **Set as solved** asks for completion evidence, confirms the exact ID and
+- **Solved** asks for completion evidence, confirms the exact ID and
   project, marks the activity Completed, and moves it to the appropriate
   year/month archive. A mitigation or accepted risk should not be recorded as a
   completed patch unless the evidence supports that conclusion.
+- **Ignored** requires a reason, records the row as Ignored, and archives it
+  without representing it as remediated.
 - **AI chat** opens the selected activity in the assistant and prepares a
   remediation-oriented question. The assistant can propose changes but cannot
   apply them without confirmation.
@@ -482,7 +492,9 @@ organized by year, month, and run. New runs are stored physically below
 `output/analysis-runs/YYYY/MM/<run-id>/`; legacy flat run directories remain
 readable. Selecting a run opens `run-summary.txt` first. Use the file selector
 to inspect its chronological `run.log`, routing `plan.json`, candidate ledger,
-coordinator output, and provider evidence dossiers. When a current run ledger
+candidate intake, discovery output, coordinator output, and provider evidence
+dossiers. A summary above the viewer counts intake candidates, ledger
+decisions, and confidence bands. When a current run ledger
 records `not-applicable` decisions, the viewer also lists their advisory,
 project, declared version, and recorded reason above the file content.
 
@@ -600,6 +612,16 @@ one controlled correction attempt. The correction cannot broaden the analysis
 scope or publish directly to canonical reports. Both attempts remain visible in
 the run log and **correction-output.md**; a second validation failure ends the
 run without promoting the staged reports.
+
+Before consolidation, a separate discovery phase writes and validates an
+immutable `candidate-intake.json`. Every active source is accounted for and
+every dossier identifier must survive into this intake. Consolidation must then
+produce one ledger decision for every intake candidate/project/technology
+combination. The launcher adds the configured deterministic score and rejects
+missing candidates, generic identity replacements, inconsistent scores, or
+staged reports that omit exact bulletin/CVE identifiers. The PHP2Shell
+regression fixture exercises `AL07/261021/CSIRT-ITA`, long CVE serials, and a
+declared PHP `>=7.2` range without requiring live ACN access during tests.
 
 The **Activity** tab opens with the prominent **fAIry at work** panel. It shows
 advisory sources and local projects flowing toward matching and reporting as an

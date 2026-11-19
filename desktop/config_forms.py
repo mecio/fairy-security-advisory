@@ -492,11 +492,27 @@ class ReportsConfigForm(QWidget):
         self.incremental_overlap.setToolTip(
             "Recheck this many days before each source's last successful checkpoint."
         )
+        self.actionable_threshold = QSpinBox()
+        self.actionable_threshold.setRange(0, 100)
+        self.actionable_threshold.setSuffix("%")
+        self.review_threshold = QSpinBox()
+        self.review_threshold.setRange(0, 100)
+        self.review_threshold.setSuffix("%")
+        self.collapse_threshold = QSpinBox()
+        self.collapse_threshold.setRange(0, 100)
+        self.collapse_threshold.setSuffix("%")
+        self.notify_below_threshold = QCheckBox("Allow notifications below review threshold")
+        self.show_weak_signals = QCheckBox("Show weak signals in the configured view")
         behavior_form.addRow("Timezone", self.timezone)
         behavior_form.addRow("Report language", self.language)
         behavior_form.addRow(self.include_open)
         behavior_form.addRow(self.preserve_evidence)
         behavior_form.addRow("Incremental overlap", self.incremental_overlap)
+        behavior_form.addRow("Confirmed finding from", self.actionable_threshold)
+        behavior_form.addRow("Needs review from", self.review_threshold)
+        behavior_form.addRow("Collapse below", self.collapse_threshold)
+        behavior_form.addRow(self.notify_below_threshold)
+        behavior_form.addRow(self.show_weak_signals)
         groups.addWidget(behavior, 0, 1)
 
         risk_group = QGroupBox("Risk levels")
@@ -536,6 +552,16 @@ class ReportsConfigForm(QWidget):
         self.include_open.setChecked(bool(reports.get("include_open_followups", True)))
         self.preserve_evidence.setChecked(bool(reports.get("preserve_existing_evidence", True)))
         self.incremental_overlap.setValue(int(reports.get("incremental_overlap_days", 10)))
+        presentation = reports.get("finding_presentation", {}) or {}
+        self.actionable_threshold.setValue(int(presentation.get("actionable_threshold", 80)))
+        self.review_threshold.setValue(int(presentation.get("review_threshold", 50)))
+        self.collapse_threshold.setValue(int(presentation.get("collapse_below_threshold", 50)))
+        self.notify_below_threshold.setChecked(bool(
+            presentation.get("notify_below_threshold", False)
+        ))
+        self.show_weak_signals.setChecked(bool(
+            presentation.get("show_weak_signals", False)
+        ))
         risks = [str(value) for value in reports.get("risk_levels", self.RISK_LEVELS) or []]
         classifications = [
             str(value) for value in reports.get("classifications", self.CLASSIFICATIONS) or []
@@ -569,6 +595,13 @@ class ReportsConfigForm(QWidget):
             "include_open_followups": self.include_open.isChecked(),
             "preserve_existing_evidence": self.preserve_evidence.isChecked(),
             "incremental_overlap_days": self.incremental_overlap.value(),
+            "finding_presentation": {
+                "actionable_threshold": self.actionable_threshold.value(),
+                "review_threshold": self.review_threshold.value(),
+                "collapse_below_threshold": self.collapse_threshold.value(),
+                "notify_below_threshold": self.notify_below_threshold.isChecked(),
+                "show_weak_signals": self.show_weak_signals.isChecked(),
+            },
             "risk_levels": [
                 value for value, checkbox in self.risk_checks.items() if checkbox.isChecked()
             ] + self._extra_risks,
@@ -578,6 +611,8 @@ class ReportsConfigForm(QWidget):
         })
         if not reports["risk_levels"] or not reports["classifications"]:
             raise ValueError("Select at least one risk level and one applicability decision.")
+        if self.review_threshold.value() > self.actionable_threshold.value():
+            raise ValueError("Needs review threshold cannot exceed confirmed finding threshold.")
         data["reports"] = reports
         return data
 

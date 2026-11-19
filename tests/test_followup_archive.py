@@ -28,6 +28,7 @@ class FollowupArchiveTest(unittest.TestCase):
                 + "| A-1 | CVE-1 | api | Open | High | Dev | Open | 2026-10-01 | 2026-11-01 | Patch | — | — |\n"
                 + "| A-2 | CVE-2 | api | Done | High | Dev | Completed | 2026-10-01 | 2026-10-31 | None | — | Tests |\n"
                 + "| A-3 | CVE-3 | web | Closed | Critical | Ops | Externally closed | 2026-11-01 | 2026-11-16 | Monitor | — | Admin evidence |\n"
+                + "| A-4 | CVE-4 | web | Ignored | Low | Dev | Ignored | 2026-11-01 | 2026-11-17 | None | — | Accepted duplicate |\n"
                 + "\n## Notes\n\nKeep this note.\n",
                 encoding="utf-8",
             )
@@ -37,13 +38,15 @@ class FollowupArchiveTest(unittest.TestCase):
             )
 
             active = followup.read_text(encoding="utf-8")
-            self.assertEqual(result["archived"], 2)
+            self.assertEqual(result["archived"], 3)
             self.assertIn("| A-1 |", active)
             self.assertNotIn("| A-2 |", active)
             self.assertNotIn("| A-3 |", active)
+            self.assertNotIn("| A-4 |", active)
             self.assertIn("Keep this note.", active)
             self.assertIn("| A-2 |", (archive / "2026/10.md").read_text(encoding="utf-8"))
             self.assertIn("| A-3 |", (archive / "2026/11.md").read_text(encoding="utf-8"))
+            self.assertIn("| A-4 |", (archive / "2026/11.md").read_text(encoding="utf-8"))
             self.assertEqual(stat.S_IMODE((archive / "2026/11.md").stat().st_mode), 0o600)
 
             second = archive_closed_followups(

@@ -14,5 +14,13 @@ reports:
   release_metadata:
     online_enabled: true
     negative_ttl_days: 30
+  # Correspondence affects presentation and notifications only. Candidates are
+  # always retained in the intake and ledger.
+  finding_presentation:
+    actionable_threshold: 80
+    review_threshold: 50
+    collapse_below_threshold: 50
+    notify_below_threshold: false
+    show_weak_signals: false
   risk_levels: [critical, high, medium, low, informational]
   classifications: [immediate-action, follow-up, monitor, not-applicable]

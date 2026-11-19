@@ -262,7 +262,10 @@ authenticated local Codex service. For Claude subscription allowance, use
 as a stable non-interactive command.
 
 The Reports page lists **Follow-up** first. Its interactive table provides a
-green **Set as solved** action and an **AI chat** action for every open row.
+green **Solved** action, an **Ignored** action, and an **AI chat** action for
+every open row. It also shows the deterministic correspondence percentage and
+confidence band recorded by the latest candidate ledger. The confidence filter
+changes presentation only; **All confidence** always exposes every row.
 Solving requires completion evidence and updates only the selected stable ID;
 AI chat opens the same issue in the assistant and prepares a remediation
 question. Closed rows remain visible for history but their action buttons are
@@ -310,7 +313,7 @@ In the desktop application, Configuration opens in **Simple** mode. Local
 projects can be managed with directory selectors, enabled states, exclusions,
 and inventory limits. Advisory sources use a guided dialog for URL, source
 type, filter, technologies, priority, and active state. Reports expose output
-locations and classification choices; AI agents expose model and execution
+locations, classification choices, and correspondence thresholds; AI agents expose model and execution
 profiles; Backups provides a file checklist and archive settings. Switch to
 **Advanced YAML** when a setting is not exposed by a form. Structured edits
 preserve unknown fields, although YAML comments and formatting may be

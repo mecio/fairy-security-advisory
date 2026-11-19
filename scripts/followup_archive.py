@@ -21,7 +21,7 @@ except ImportError:
     from scripts.configuration import effective_config_path
 
 
-CLOSED_MARKERS = ("closed", "completed", "resolved", "not applicable")
+CLOSED_MARKERS = ("closed", "completed", "resolved", "not applicable", "ignored")
 
 
 def is_closed_status(status: str) -> bool:

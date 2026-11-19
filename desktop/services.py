@@ -436,8 +436,9 @@ def analysis_run_files(directory: Path) -> list[Path]:
     safe = _safe_analysis_run_directory(directory)
     preferred = {
         "run-summary.txt": 0, "run.log": 1, "coordinator-output.md": 2,
-        "correction-output.md": 3, "plan.json": 4, "candidate-ledger.json": 5,
-        "evidence-state.json": 6,
+        "candidate-discovery-output.md": 3, "correction-output.md": 4,
+        "plan.json": 5, "candidate-intake.json": 6, "candidate-ledger.json": 7,
+        "evidence-state.json": 8,
     }
     files = [
         path for path in safe.iterdir()
@@ -466,6 +467,88 @@ def analysis_run_exclusions(directory: Path) -> list[dict[str, str]]:
         "version": str(item.get("declared_value", "")),
         "reason": str(item.get("decision_reason", "")),
     } for item in candidates if isinstance(item, dict) and item.get("decision") == "not-applicable"]
+
+
+def analysis_run_candidate_summary(directory: Path) -> dict[str, Any]:
+    """Summarize frozen intake and scored ledger candidates for the Logs GUI."""
+    safe = _safe_analysis_run_directory(directory)
+    result: dict[str, Any] = {
+        "intake": 0, "ledger": 0, "confirmed": 0, "review": 0,
+        "weak": 0, "unscored": 0,
+    }
+    for filename, key in (
+        ("candidate-intake.json", "intake"), ("candidate-ledger.json", "ledger"),
+    ):
+        path = safe / filename
+        if not path.is_file() or path.is_symlink():
+            continue
+        try:
+            document = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        candidates = document.get("candidates", []) if isinstance(document, dict) else []
+        if not isinstance(candidates, list):
+            continue
+        result[key] = len([item for item in candidates if isinstance(item, dict)])
+        if key == "ledger":
+            for item in candidates:
+                if not isinstance(item, dict):
+                    continue
+                band = str(item.get("confidence", "unscored"))
+                result[
+                    band if band in {"confirmed", "review", "weak"} else "unscored"
+                ] += 1
+    return result
+
+
+def latest_candidate_assessments() -> list[dict[str, Any]]:
+    """Load scored candidates from the newest completed run that has a ledger."""
+    for entry in analysis_run_entries():
+        if str(entry.get("status", "")).casefold() == "failed":
+            continue
+        ledger = Path(entry["path"]) / "candidate-ledger.json"
+        if not ledger.is_file() or ledger.is_symlink():
+            continue
+        try:
+            document = json.loads(ledger.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        candidates = document.get("candidates", []) if isinstance(document, dict) else []
+        if isinstance(candidates, list):
+            return [item for item in candidates if isinstance(item, dict)]
+    return []
+
+
+def followup_match_assessment(
+    activity: dict[str, str], candidates: list[dict[str, Any]] | None = None,
+) -> dict[str, Any] | None:
+    """Match a follow-up row to the strongest scored ledger candidate."""
+    haystack = "\n".join((
+        activity.get("Issue title", ""), activity.get("Advisory / CVE", ""),
+        activity.get("Description", ""),
+    )).casefold()
+    matches: list[dict[str, Any]] = []
+    for candidate in candidates if candidates is not None else latest_candidate_assessments():
+        if (
+            not isinstance(candidate.get("match_score"), int)
+            or str(candidate.get("confidence", "")) not in {"confirmed", "review", "weak"}
+        ):
+            continue
+        markers = [
+            str(candidate.get("advisory_id", "")),
+            *[str(value) for value in candidate.get("identifiers", [])],
+        ]
+        if any(marker and marker.casefold() in haystack for marker in markers):
+            matches.append(candidate)
+    if not matches:
+        return None
+    selected = max(matches, key=lambda item: int(item.get("match_score", 0)))
+    return {
+        "score": int(selected.get("match_score", 0)),
+        "confidence": str(selected.get("confidence", "weak")),
+        "candidate_count": len(matches),
+        "breakdown": selected.get("score_breakdown", {}),
+    }
 
 
 def read_analysis_run_file(path: Path) -> str:

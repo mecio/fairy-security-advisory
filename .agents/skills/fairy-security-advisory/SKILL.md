@@ -78,7 +78,7 @@ or an in-scope source candidate from analysis.
    is limited to current inventoried versions. Ignore advisories whose affected
    ranges cannot include the current version. Unknown versions require a
    generic low-confidence scan and an explicit human-review limitation.
-4. Open every candidate advisory and collect its identifier/CVE, affected and fixed versions, prerequisites, vector, mitigations, and date. Confirm through primary sources in this order: vendor, official project, CVE record. Treat aggregators as signals, not sole evidence.
+4. Open every candidate advisory and collect its identifier/CVE, affected and fixed versions, prerequisites, vector, mitigations, and date. Confirm through primary sources in this order: vendor, official project, CVE record. Treat aggregators as signals, not sole evidence. When the launcher supplies `candidate-intake.json`, treat it as immutable: preserve every candidate ID and exact advisory/source/CVE identifier in the ledger and staged reports. Do not invent correspondence scores; the launcher calculates them deterministically and presentation thresholds never remove candidates.
 5. Check manifests and lockfiles and, when possible without mutation, installed versions. Always distinguish presence, declared version, verified installed version, and production. Never infer production from local development.
    Treat `manual_technologies` in the local inventory as user-declared scope
    hints; verify their actual use and version before claiming applicability.

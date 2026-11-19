@@ -14,7 +14,8 @@ from pathlib import Path
 
 from PySide6.QtCore import QProcess, QProcessEnvironment, QSize, Qt, QTimer, QUrl
 from PySide6.QtGui import (
-    QCloseEvent, QColor, QDesktopServices, QFont, QPixmap, QTextCursor, QTextDocument,
+    QCloseEvent, QColor, QDesktopServices, QFont, QKeySequence, QPalette, QPixmap,
+    QShortcut, QTextCursor, QTextDocument,
 )
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -45,7 +46,9 @@ from PySide6.QtWidgets import (
     QTableWidget,
     QTableWidgetItem,
     QTextBrowser,
+    QTextEdit,
     QToolBar,
+    QToolTip,
     QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
@@ -123,6 +126,10 @@ QListWidget::indicator:disabled, QTreeWidget::indicator:disabled {
 QGroupBox { border: 1px solid #24415b; border-radius: 7px; margin-top: 10px; padding: 10px 8px 8px 8px; }
 QGroupBox::title { color: #d8efff; subcontrol-origin: margin; left: 10px; padding: 0 5px; }
 QHeaderView::section { background: #10243d; color: #d8efff; padding: 7px; border: 0; }
+QToolTip {
+  background: #10243d; color: #f2f8ff; border: 1px solid #63e7ff;
+  border-radius: 4px; padding: 6px;
+}
 QStatusBar { background: #0d1e35; color: #e8f2ff; border: 0; min-height: 30px; padding: 4px 10px; }
 QStatusBar QLabel { background: #0d1e35; color: #c9dded; border: 0; padding: 2px 8px; }
 QLabel#footerIdentity { color: #9fb4c8; }
@@ -280,6 +287,10 @@ class MainWindow(QMainWindow):
         self.resize(1280, 820)
         self.setMinimumSize(980, 700)
         self.setStyleSheet(STYLE)
+        tooltip_palette = QToolTip.palette()
+        tooltip_palette.setColor(QPalette.ColorRole.ToolTipBase, QColor("#10243d"))
+        tooltip_palette.setColor(QPalette.ColorRole.ToolTipText, QColor("#f2f8ff"))
+        QToolTip.setPalette(tooltip_palette)
         self.process = QProcess(self)
         self.process.setWorkingDirectory(str(services.ROOT))
         self.process.setProcessChannelMode(QProcess.ProcessChannelMode.MergedChannels)
@@ -945,6 +956,45 @@ class MainWindow(QMainWindow):
         page, layout = self._page(
             "Reports and follow-up", "Rendered local Markdown output. Environment-derived content remains under the Git-ignored output directory.",
         )
+        search = QHBoxLayout()
+        search.addWidget(QLabel("Search current report"))
+        self.report_search = QLineEdit()
+        self.report_search.setClearButtonEnabled(True)
+        self.report_search.setPlaceholderText("Find text… (Ctrl+F)")
+        self.report_search.returnPressed.connect(self.search_report_next)
+        self.report_search.textChanged.connect(self._reset_report_search)
+        search.addWidget(self.report_search, 1)
+        previous = QPushButton("Previous")
+        previous.setProperty("variant", "secondary")
+        previous.clicked.connect(self.search_report_previous)
+        search.addWidget(previous)
+        next_button = QPushButton("Next")
+        next_button.clicked.connect(self.search_report_next)
+        search.addWidget(next_button)
+        self.followup_confidence_filter = QComboBox()
+        self.followup_confidence_filter.addItem("Configured view", "configured")
+        self.followup_confidence_filter.addItem("All confidence", "all")
+        self.followup_confidence_filter.addItem("Confirmed", "confirmed")
+        self.followup_confidence_filter.addItem("Needs review", "review")
+        self.followup_confidence_filter.addItem("Weak signals", "weak")
+        self.followup_confidence_filter.addItem("Unscored", "unscored")
+        self.followup_confidence_filter.setToolTip(
+            "Filter presentation only. Candidate intake and ledger entries are never removed."
+        )
+        self.followup_confidence_filter.currentIndexChanged.connect(
+            self.apply_followup_confidence_filter
+        )
+        search.addWidget(self.followup_confidence_filter)
+        self.report_search_status = QLabel("Ctrl+F focuses report search.")
+        self.report_search_status.setStyleSheet("color:#7890a8; padding-left:6px;")
+        search.addWidget(self.report_search_status)
+        layout.addLayout(search)
+        self.report_last_query = ""
+        self.report_table_matches: list[int] = []
+        self.report_table_match_index = -1
+        self.report_find_shortcut = QShortcut(QKeySequence.StandardKey.Find, page)
+        self.report_find_shortcut.activated.connect(self.focus_report_search)
+
         splitter = QSplitter()
         self.report_list = QListWidget()
         self.report_list.setObjectName("reports")
@@ -964,15 +1014,25 @@ class MainWindow(QMainWindow):
         ))
         self.followup_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.followup_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.followup_table.setWordWrap(True)
+        self.followup_table.setHorizontalScrollMode(
+            QAbstractItemView.ScrollMode.ScrollPerPixel
+        )
         self.followup_table.verticalHeader().setDefaultSectionSize(96)
+        self.followup_table.verticalHeader().setSectionResizeMode(
+            QHeaderView.ResizeMode.Interactive
+        )
         self.followup_table.horizontalHeader().setMinimumHeight(38)
         for column, width in (
-            (0, 245), (1, 100), (2, 75), (3, 90), (4, 100), (5, 115), (6, 205),
+            (0, 320), (1, 150), (2, 85), (3, 150), (4, 105), (5, 220), (6, 275),
         ):
             self.followup_table.horizontalHeader().setSectionResizeMode(
-                column, QHeaderView.ResizeMode.Fixed,
+                column, QHeaderView.ResizeMode.Interactive,
             )
             self.followup_table.setColumnWidth(column, width)
+        self.followup_table.horizontalHeader().sectionResized.connect(
+            lambda *_args: self._resize_followup_rows()
+        )
         self.report_stack.addWidget(self.followup_table)
         splitter.addWidget(self.report_stack)
         splitter.setStretchFactor(1, 1)
@@ -1027,6 +1087,11 @@ class MainWindow(QMainWindow):
         self.analysis_log_exclusions.setStyleSheet("color:#e5bb62; padding:4px 2px;")
         self.analysis_log_exclusions.setVisible(False)
         viewer_layout.addWidget(self.analysis_log_exclusions)
+        self.analysis_log_candidates = QLabel()
+        self.analysis_log_candidates.setWordWrap(True)
+        self.analysis_log_candidates.setStyleSheet("color:#9ed9ef; padding:4px 2px;")
+        self.analysis_log_candidates.setVisible(False)
+        viewer_layout.addWidget(self.analysis_log_candidates)
         self.analysis_log_viewer = QPlainTextEdit()
         self.analysis_log_viewer.setReadOnly(True)
         self.analysis_log_viewer.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
@@ -2078,6 +2143,7 @@ class MainWindow(QMainWindow):
         path = self.report_paths.get(row)
         if not path or not path.is_file():
             return
+        self._reset_report_search()
         followup = services.ROOT / str(
             services.reports_config().get("followup_file", "output/followup.md")
         )
@@ -2087,6 +2153,123 @@ class MainWindow(QMainWindow):
             return
         self.report_stack.setCurrentWidget(self.report_viewer)
         self.report_viewer.setMarkdown(path.read_text(encoding="utf-8", errors="replace"))
+
+    def focus_report_search(self) -> None:
+        self.report_search.setFocus()
+        self.report_search.selectAll()
+
+    def _reset_report_search(self, _text: str = "") -> None:
+        self.report_last_query = ""
+        self.report_table_matches = []
+        self.report_table_match_index = -1
+        self.report_viewer.setExtraSelections([])
+        self.report_search_status.setText(
+            "Press Enter or Next to search." if self.report_search.text().strip()
+            else "Ctrl+F focuses report search."
+        )
+
+    def _followup_search_rows(self, query: str) -> list[int]:
+        matches: list[int] = []
+        needle = query.casefold()
+        for row in range(self.followup_table.rowCount()):
+            if self.followup_table.isRowHidden(row):
+                continue
+            values: list[str] = []
+            activity = self.followup_table.cellWidget(row, 0)
+            if isinstance(activity, QLabel):
+                document = QTextDocument()
+                document.setHtml(activity.text())
+                values.extend((document.toPlainText(), activity.toolTip()))
+            values.extend(
+                item.text()
+                for column in range(1, 6)
+                if (item := self.followup_table.item(row, column)) is not None
+            )
+            if needle in "\n".join(values).casefold():
+                matches.append(row)
+        return matches
+
+    def _highlight_report_match(self) -> None:
+        selection = QTextEdit.ExtraSelection()
+        selection.cursor = self.report_viewer.textCursor()
+        selection.format.setBackground(QColor("#ffd166"))
+        selection.format.setForeground(QColor("#081426"))
+        self.report_viewer.setExtraSelections([selection])
+
+    def _search_report(self, *, backward: bool) -> None:
+        query = self.report_search.text().strip()
+        if not query:
+            self.report_search_status.setText("Enter a search term first.")
+            self.report_search.setFocus()
+            return
+        if self.report_stack.currentWidget() is self.followup_table:
+            if query != self.report_last_query:
+                self.report_table_matches = self._followup_search_rows(query)
+                self.report_table_match_index = (
+                    len(self.report_table_matches) if backward else -1
+                )
+                self.report_last_query = query
+            if not self.report_table_matches:
+                self.report_search_status.setText(f"No match found for “{query}”.")
+                return
+            step = -1 if backward else 1
+            self.report_table_match_index = (
+                self.report_table_match_index + step
+            ) % len(self.report_table_matches)
+            row = self.report_table_matches[self.report_table_match_index]
+            self.followup_table.setCurrentCell(row, 1)
+            item = self.followup_table.item(row, 1)
+            if item is not None:
+                self.followup_table.scrollToItem(item)
+            self.report_search_status.setText(
+                f"Match {self.report_table_match_index + 1} of "
+                f"{len(self.report_table_matches)}."
+            )
+            return
+
+        changed = query != self.report_last_query
+        if changed:
+            cursor = self.report_viewer.textCursor()
+            cursor.movePosition(
+                QTextCursor.MoveOperation.End if backward
+                else QTextCursor.MoveOperation.Start
+            )
+            self.report_viewer.setTextCursor(cursor)
+            self.report_last_query = query
+        found = (
+            self.report_viewer.find(query, QTextDocument.FindFlag.FindBackward)
+            if backward else self.report_viewer.find(query)
+        )
+        wrapped = False
+        if not found:
+            cursor = self.report_viewer.textCursor()
+            cursor.movePosition(
+                QTextCursor.MoveOperation.End if backward
+                else QTextCursor.MoveOperation.Start
+            )
+            self.report_viewer.setTextCursor(cursor)
+            found = (
+                self.report_viewer.find(query, QTextDocument.FindFlag.FindBackward)
+                if backward else self.report_viewer.find(query)
+            )
+            wrapped = found
+        if found:
+            self._highlight_report_match()
+            direction = "previous" if backward else "next"
+            suffix = " (wrapped)" if wrapped else ""
+            self.report_search_status.setText(
+                f"Showing {direction} match for “{query}”{suffix}."
+            )
+            self.report_viewer.ensureCursorVisible()
+        else:
+            self.report_viewer.setExtraSelections([])
+            self.report_search_status.setText(f"No match found for “{query}”.")
+
+    def search_report_next(self) -> None:
+        self._search_report(backward=False)
+
+    def search_report_previous(self) -> None:
+        self._search_report(backward=True)
 
     def load_analysis_logs(self) -> None:
         current_path = None
@@ -2142,10 +2325,26 @@ class MainWindow(QMainWindow):
         self.log_file_combo.blockSignals(True)
         self.log_file_combo.clear()
         self.log_run_files = []
+        self.analysis_log_exclusions.setVisible(False)
+        self.analysis_log_candidates.setVisible(False)
         if path_text:
             try:
                 run_path = Path(str(path_text))
                 self.log_run_files = services.analysis_run_files(run_path)
+                candidate_summary = services.analysis_run_candidate_summary(run_path)
+                if candidate_summary["intake"] or candidate_summary["ledger"]:
+                    self.analysis_log_candidates.setText(
+                        "Candidate accounting: "
+                        f"intake {candidate_summary['intake']} · "
+                        f"ledger decisions {candidate_summary['ledger']} · "
+                        f"confirmed {candidate_summary['confirmed']} · "
+                        f"review {candidate_summary['review']} · "
+                        f"weak {candidate_summary['weak']} · "
+                        f"unscored {candidate_summary['unscored']}"
+                    )
+                    self.analysis_log_candidates.setVisible(True)
+                else:
+                    self.analysis_log_candidates.setVisible(False)
                 exclusions = services.analysis_run_exclusions(run_path)
                 if exclusions:
                     details = "\n".join(
@@ -2161,6 +2360,7 @@ class MainWindow(QMainWindow):
             except (OSError, services.ConfigurationError) as error:
                 self.analysis_log_viewer.setPlainText(str(error))
                 self.analysis_log_exclusions.setVisible(False)
+                self.analysis_log_candidates.setVisible(False)
             else:
                 self.log_file_combo.addItems([path.name for path in self.log_run_files])
         self.log_file_combo.blockSignals(False)
@@ -2202,11 +2402,34 @@ class MainWindow(QMainWindow):
 
     def load_followup_table(self, path: Path | None = None) -> None:
         activities = services.followup_activities(path)
+        scored_candidates = services.latest_candidate_assessments()
         self.followup_table.setRowCount(len(activities))
         open_ids = {item.get("ID") for item in services.open_followup_activities(path)}
         for row, activity in enumerate(activities):
             advisory = activity.get("Advisory / CVE", "")
             issue_title = activity.get("Issue title", "").strip()
+            assessment = services.followup_match_assessment(activity, scored_candidates)
+            if assessment:
+                confidence = str(assessment["confidence"])
+                score = int(assessment["score"])
+                badge_colors = {
+                    "confirmed": ("#163f32", "#8ff0b5", "Confirmed"),
+                    "review": ("#4a3616", "#ffd166", "Needs review"),
+                    "weak": ("#26354a", "#afc7df", "Weak signal"),
+                }
+                background, foreground, label = badge_colors.get(
+                    confidence, badge_colors["weak"]
+                )
+                confidence_html = (
+                    f'<span style="background:{background};color:{foreground};">'
+                    f'&nbsp;{label} · {score}%&nbsp;</span><br>'
+                )
+            else:
+                confidence = "unscored"
+                confidence_html = (
+                    '<span style="background:#2c3644;color:#b8c5d1;">'
+                    '&nbsp;Unscored legacy finding&nbsp;</span><br>'
+                )
             source_links = services.followup_source_links(activity)
             source_html = ""
             if source_links:
@@ -2226,7 +2449,7 @@ class MainWindow(QMainWindow):
                 if issue_title else ""
             )
             activity_label = QLabel(
-                f"{title_html}"
+                f"{confidence_html}{title_html}"
                 f'<span style="color:#a9c3d8;">{html.escape(activity.get("ID", ""))}</span><br>'
                 f"{html.escape(advisory)}{source_html}"
             )
@@ -2235,9 +2458,21 @@ class MainWindow(QMainWindow):
             activity_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextBrowserInteraction)
             activity_label.setOpenExternalLinks(True)
             activity_label.setWordWrap(True)
+            activity_label.setProperty("confidence", confidence)
+            activity_label.setProperty(
+                "match_score", int(assessment["score"]) if assessment else -1,
+            )
+            confidence_detail = ""
+            if assessment:
+                breakdown = assessment.get("breakdown", {})
+                confidence_detail = (
+                    f"\nCorrespondence: {assessment['score']}% ({confidence})"
+                    + (f"\nBreakdown: {json.dumps(breakdown, ensure_ascii=False)}" if breakdown else "")
+                )
             activity_label.setToolTip(
                 (issue_title + "\n" if issue_title else "") + advisory
                 + ("\n" + "\n".join(url for _label, url in source_links) if source_links else "")
+                + confidence_detail
             )
             self.followup_table.setCellWidget(row, 0, activity_label)
             projects = "\n".join(services.followup_project_names(activity))
@@ -2276,22 +2511,90 @@ class MainWindow(QMainWindow):
             action_cell.setProperty("issue_id", issue_id)
             action_layout = QHBoxLayout(action_cell)
             action_layout.setContentsMargins(4, 4, 4, 4)
-            action_layout.setSpacing(6)
-            solved = QPushButton("Set as solved")
+            action_layout.setSpacing(12)
+            solved = QPushButton("Solved")
             solved.setProperty("variant", "success")
+            solved.setMinimumWidth(
+                solved.fontMetrics().horizontalAdvance(solved.text()) + 32
+            )
             solved.setEnabled(is_open)
             solved.clicked.connect(
                 lambda _checked=False, identifier=issue_id: self.set_followup_solved(identifier)
             )
             action_layout.addWidget(solved)
+            ignored = QPushButton("Ignored")
+            ignored.setProperty("variant", "warning")
+            ignored.setMinimumWidth(
+                ignored.fontMetrics().horizontalAdvance(ignored.text()) + 32
+            )
+            ignored.setEnabled(is_open)
+            ignored.clicked.connect(
+                lambda _checked=False, identifier=issue_id: self.set_followup_ignored(identifier)
+            )
+            action_layout.addWidget(ignored)
             chat = QPushButton("AI chat")
             chat.setProperty("variant", "ai")
+            chat.setMinimumWidth(
+                chat.fontMetrics().horizontalAdvance(chat.text()) + 32
+            )
             chat.setEnabled(is_open)
             chat.clicked.connect(
                 lambda _checked=False, identifier=issue_id: self.open_followup_ai_chat(identifier)
             )
             action_layout.addWidget(chat)
             self.followup_table.setCellWidget(row, 6, action_cell)
+        self.apply_followup_confidence_filter()
+        self._resize_followup_rows()
+
+    def apply_followup_confidence_filter(self, _index: int = -1) -> None:
+        selected = str(self.followup_confidence_filter.currentData() or "configured")
+        presentation = services.reports_config().get("finding_presentation", {}) or {}
+        collapse_below = int(presentation.get("collapse_below_threshold", 50))
+        show_weak = bool(presentation.get("show_weak_signals", False))
+        for row in range(self.followup_table.rowCount()):
+            activity = self.followup_table.cellWidget(row, 0)
+            confidence = str(activity.property("confidence") or "unscored") if activity else "unscored"
+            raw_score = activity.property("match_score") if activity else None
+            score = int(raw_score) if raw_score is not None else -1
+            hidden = (
+                0 <= score < collapse_below and not show_weak
+                if selected == "configured"
+                else selected != "all" and confidence != selected
+            )
+            self.followup_table.setRowHidden(
+                row, hidden,
+            )
+        self._reset_report_search()
+
+    def _resize_followup_rows(self) -> None:
+        """Fit wrapped follow-up content while keeping every row user-resizable."""
+        for row in range(self.followup_table.rowCount()):
+            if self.followup_table.isRowHidden(row):
+                continue
+            required_height = 72
+            activity_label = self.followup_table.cellWidget(row, 0)
+            if isinstance(activity_label, QLabel):
+                document = QTextDocument()
+                document.setDefaultFont(activity_label.font())
+                document.setHtml(activity_label.text())
+                document.setTextWidth(max(80, self.followup_table.columnWidth(0) - 16))
+                required_height = max(
+                    required_height, int(document.size().height() + 48),
+                )
+            metrics = self.followup_table.fontMetrics()
+            for column in range(1, 6):
+                item = self.followup_table.item(row, column)
+                if item is None or not item.text():
+                    continue
+                bounds = metrics.boundingRect(
+                    0, 0, max(40, self.followup_table.columnWidth(column) - 16), 10000,
+                    int(Qt.TextFlag.TextWordWrap), item.text(),
+                )
+                required_height = max(required_height, bounds.height() + 16)
+            action_cell = self.followup_table.cellWidget(row, 6)
+            if action_cell is not None:
+                required_height = max(required_height, action_cell.sizeHint().height() + 8)
+            self.followup_table.setRowHeight(row, required_height)
 
     def set_followup_solved(self, issue_id: str) -> None:
         issue = next(
@@ -2336,6 +2639,53 @@ class MainWindow(QMainWindow):
         QMessageBox.information(
             self, "Activity solved",
             f"{issue_id} was marked Completed with evidence and remains linked to {issue.get('Project')}.",
+        )
+
+    def set_followup_ignored(self, issue_id: str) -> None:
+        issue = next(
+            (item for item in services.open_followup_activities() if item.get("ID") == issue_id),
+            None,
+        )
+        if not issue:
+            QMessageBox.information(
+                self, "Already closed", f"Activity {issue_id} is no longer open."
+            )
+            self.load_reports()
+            return
+        reason, accepted = QInputDialog.getMultiLineText(
+            self, "Ignore reason",
+            f"Reason required to ignore {issue_id} for {issue.get('Project')}:\n"
+            "Record why this activity requires no further action.",
+        )
+        reason = reason.strip()
+        if not accepted:
+            return
+        if not reason:
+            QMessageBox.warning(
+                self, "Reason required",
+                "The activity cannot be ignored without a recorded reason.",
+            )
+            return
+        if QMessageBox.question(
+            self, "Ignore activity",
+            f"ID: {issue_id}\nProject: {issue.get('Project')}\n\nReason:\n{reason}\n\n"
+            "Mark this exact follow-up activity as Ignored?",
+        ) != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            services.update_followup_activity(issue_id, {
+                "Status": "Ignored",
+                "Next action": "No further action",
+                "Completion evidence": reason,
+            })
+            services.archive_closed_followups(services.ROOT)
+        except (OSError, ValueError, services.ConfigurationError) as error:
+            QMessageBox.critical(self, "Unable to update follow-up", str(error))
+            return
+        self.refresh_all()
+        QMessageBox.information(
+            self, "Activity ignored",
+            f"{issue_id} was marked Ignored with a recorded reason.",
         )
 
     def open_followup_ai_chat(self, issue_id: str) -> None:

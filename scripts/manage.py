@@ -90,6 +90,16 @@ try:
 except ImportError:
     from scripts.advisory_guardrails import validate_candidate_ledger
 try:
+    from candidate_intake import (
+        score_candidate_ledger, validate_candidate_intake,
+        validate_presentation_settings,
+    )
+except ImportError:
+    from scripts.candidate_intake import (
+        score_candidate_ledger, validate_candidate_intake,
+        validate_presentation_settings,
+    )
+try:
     from technology_state import (
         baseline_windows, collect_technology_scope, incremental_since, load_state_for_run, prune_inactive_baselines,
         record_completed_baselines, record_source_successes, save_state, scan_rows, StateError,
@@ -894,14 +904,54 @@ def scoped_evidence_prompt(
     )
 
 
+def candidate_intake_prompt(
+    provider: str, plan_path: Path, dossiers: list[Path], intake_path: Path,
+    active_sources: list[dict], execution_mode: str | None = None,
+) -> str:
+    """Build a frozen source-candidate inventory before report consolidation."""
+    sources = json.dumps(active_sources, ensure_ascii=False, indent=2)
+    dossier_lines = "\n".join(f"- {path}" for path in dossiers) or "- none"
+    return (
+        f"{AI_PROMPTS[provider]}\n\n"
+        "Run only the source-candidate discovery phase. Do not inspect projects, decide "
+        "project applicability, write reports, write a final candidate ledger, or update "
+        "inventory. Read the authoritative plan and provider dossiers, consult every active "
+        "source beginning with ACN, follow direct bulletin links, and confirm identities with "
+        "primary sources. A source failure or identity doubt must retain the candidate with "
+        "partial/unverified metadata; it must never suppress it. CVE serial numbers contain "
+        "four or more digits after the year, so identifiers such as CVE-2026-109618 are valid "
+        "syntax and require source verification rather than rejection. Include every CVE, "
+        "GHSA, and bulletin identifier mentioned in any provider dossier.\n\n"
+        f"Write exactly one JSON document to {intake_path} and no other file. It must use "
+        "schema_version 1, a candidates list, and a sources list containing every active source "
+        "exactly once. Every candidate requires candidate_id (stable source:id), advisory_id "
+        "(the exact bulletin/vendor/CVE identifier that must survive into ledger and reports), "
+        "source_id, source_record_id when available, title, HTTPS url, identifiers list, "
+        "technology_keys from plan.technology_scope, optional project_ids, affected_range, "
+        "identity_status (confirmed, supported, unverified, conflicting), source_quality "
+        "(primary, official-aggregator, secondary, unknown), and extraction_status "
+        "(complete, partial, failed). Each source entry uses id and status complete, partial, "
+        "or failed. Do not create generic replacements for specific advisories.\n\n"
+        f"Authoritative plan: {plan_path}\n"
+        f"Active sources:\n{sources}\n"
+        f"Provider dossiers:\n{dossier_lines}\n\n"
+        f"{RESET_ARCHIVE_BOUNDARY}\n\n"
+        + execution_guidance(execution_mode)
+    )
+
+
 def consolidation_prompt(
     provider: str, plan_path: Path, dossiers: list[Path], evidence_state_path: Path | None = None,
     execution_mode: str | None = None, candidate_ledger_path: Path | None = None,
     staged_paths: dict[str, Path] | None = None,
+    candidate_intake_path: Path | None = None,
+    finding_presentation: dict | None = None,
 ) -> str:
     evidence_state_path = evidence_state_path or plan_path.with_name("evidence-state.json")
     dossier_lines = "\n".join(f"- {path}" for path in dossiers) or "- none"
     ledger_path = candidate_ledger_path or plan_path.with_name("candidate-ledger.json")
+    intake_path = candidate_intake_path or plan_path.with_name("candidate-intake.json")
+    presentation = validate_presentation_settings(finding_presentation)
     staging = ""
     if staged_paths:
         staging = (
@@ -954,14 +1004,22 @@ def consolidation_prompt(
         "searched_since must be no later than the release date. Use partial when an official "
         "release date or full historical coverage cannot be established. "
         f"Write a candidate ledger to {ledger_path}: schema_version 1 and one entry per "
-        "candidate/project technology decision with advisory_id, source_id, project_id, technology_key, declared_value, "
-        "affected_range, range_relation (overlaps, disjoint, unresolved), prerequisite_status, decision_reason, and "
+        f"candidate from the immutable intake at {intake_path}. Preserve candidate_id and the exact "
+        "advisory_id; never replace a specific bulletin or CVE with a generic label. Write one "
+        "candidate/project/technology decision with candidate_id, advisory_id, source_id, project_id, technology_key, declared_value, "
+        "affected_range, range_relation (overlaps, disjoint, unresolved), prerequisite_status "
+        "(confirmed-present, confirmed-absent, not-required, or unknown), decision_reason, and "
         "decision (immediate-action, follow-up, monitor, not-applicable). A populated declared "
-        "range that overlaps or cannot be resolved against an affected range must not be not-applicable. "
-        "Include a sources list "
-        "containing every configured active source ID exactly once with status complete, partial, "
-        "or failed. Mark a source complete only when advisory content coverage, not mere reachability, "
-        "succeeded. "
+        "range that overlaps or cannot be resolved against an affected range must not be not-applicable "
+        "unless a required prerequisite is positively confirmed absent. "
+        "Copy the immutable intake sources list exactly, retaining every active source ID and its "
+        "complete, partial, or failed status. Mark a source complete only when advisory content "
+        "coverage, not mere reachability, succeeded. "
+        "Do not invent match_score values: the launcher calculates them deterministically after "
+        "consolidation. In prose, keep severity separate from correspondence confidence and use "
+        "neutral 'needs verification' language for unresolved candidates. The configured display "
+        f"thresholds are {json.dumps(presentation, ensure_ascii=False)}; they affect presentation "
+        "and notifications only, never candidate accounting. "
         f"{RESET_ARCHIVE_BOUNDARY} After a reset, rebuild current reports from "
         "fresh evidence and current files only. Do not infer production status "
         "from source code or a local development runtime. "
@@ -976,7 +1034,7 @@ def correction_prompt(
     provider: str, plan_path: Path, coordinator_output: Path,
     candidate_ledger_path: Path, evidence_state_path: Path,
     staged_paths: dict[str, Path], validation_errors: str,
-    execution_mode: str | None = None,
+    execution_mode: str | None = None, candidate_intake_path: Path | None = None,
 ) -> str:
     """Return the single, tightly scoped correction request after validation failure."""
     targets = {
@@ -998,7 +1056,11 @@ def correction_prompt(
         "evidence receipt. Reconcile them with each other before finishing. There will be "
         "no further correction attempt.\n\n"
         f"Authoritative plan: {plan_path}\n"
-        f"Previous coordinator output: {coordinator_output}\n"
+        + (
+            f"Immutable candidate intake: {candidate_intake_path}\n"
+            if candidate_intake_path is not None else ""
+        )
+        + f"Previous coordinator output: {coordinator_output}\n"
         f"Writable correction targets:\n{json.dumps(targets, ensure_ascii=False, indent=2)}\n\n"
         f"Deterministic validation payload:\n{failure}\n\n"
         f"{RESET_ARCHIVE_BOUNDARY}\n\n"
@@ -1122,10 +1184,11 @@ def validate_canonical_report_updates(
 
 def validate_staged_analysis_artifacts(
     staged_paths: dict[str, Path], staged_before: dict[str, str | None],
-    candidate_ledger_path: Path, evidence_state_path: Path,
+    candidate_ledger_path: Path, candidate_intake_path: Path, evidence_state_path: Path,
     technology_scope: list[dict], baseline_keys: list[str],
     active_source_ids: list[str], baseline_windows_by_key: dict[str, dict],
     *, expected_project_ids: list[str], prior_daily_text: str | None,
+    finding_presentation: dict | None = None,
 ) -> tuple[bool, str, dict[str, str], list[str]]:
     """Validate staging, ledger, and receipt independently and aggregate errors."""
     errors: list[str] = []
@@ -1140,9 +1203,14 @@ def validate_staged_analysis_artifacts(
     if not staging_valid:
         errors.append(f"staging: {staging_detail}")
     try:
+        score_candidate_ledger(
+            candidate_ledger_path, candidate_intake_path, finding_presentation,
+        )
         validate_candidate_ledger(
             candidate_ledger_path, technology_scope,
             staged_paths["daily report"], staged_paths["follow-up"],
+            candidate_intake_path=candidate_intake_path,
+            finding_presentation=finding_presentation,
         )
     except (OSError, ValueError) as error:
         errors.append(f"candidate ledger: {error}")
@@ -1338,6 +1406,13 @@ def run_ai_check(
     reports_settings = safe_load_yaml(
         effective_config_path(CONFIG_DIR, "reports.yaml")
     ).get("reports", {})
+    try:
+        finding_presentation = validate_presentation_settings(
+            reports_settings.get("finding_presentation", {})
+        )
+    except ValueError as error:
+        print(f"Invalid finding presentation settings: {error}", file=sys.stderr)
+        return 1
     daily_directory = ROOT / str(
         reports_settings.get("daily_directory", "output/daily-advisory-check")
     )
@@ -1447,8 +1522,10 @@ def run_ai_check(
     summary_path = run_directory / "run-summary.txt"
     log_path = run_directory / "run.log"
     coordinator_output = run_directory / "coordinator-output.md"
+    discovery_output = run_directory / "candidate-discovery-output.md"
     correction_output = run_directory / "correction-output.md"
     evidence_state_path = run_directory / "evidence-state.json"
+    candidate_intake_path = run_directory / "candidate-intake.json"
     started_monotonic = time.monotonic()
     phase_results: list[str] = []
     plan["profile"] = profile_name
@@ -1504,6 +1581,8 @@ def run_ai_check(
             f"Plan: {plan_path.name}",
             f"Event log: {log_path.name}",
             f"Coordinator output: {coordinator_output.name if coordinator_output.is_file() else 'not produced'}",
+            f"Candidate intake: {candidate_intake_path.name if candidate_intake_path.is_file() else 'not produced'}",
+            f"Discovery output: {discovery_output.name if discovery_output.is_file() else 'not produced'}",
             f"Correction output: {correction_output.name if correction_output.is_file() else 'not needed'}",
             f"Evidence state: {evidence_state_path.name if evidence_state_path.is_file() else 'not produced'}",
         ))
@@ -1577,6 +1656,73 @@ def run_ai_check(
             detail=f"Dossier saved · {completed_projects}/{plan['selected_count']} projects",
         )
         dossiers.append(dossier)
+    active_source_ids = [str(source["id"]) for source in active_sources]
+    discovery_command = ai_command(
+        provider, profile_name, mode_name, non_interactive=True,
+        prompt=candidate_intake_prompt(
+            provider, plan_path, dossiers, candidate_intake_path,
+            active_sources, mode_name,
+        ),
+    )
+    if discovery_command is None:
+        print(f"{provider} CLI is unavailable for candidate discovery.", file=sys.stderr)
+        phase_results.append(f"{provider} candidate discovery — failed (CLI unavailable)")
+        return finish_run("failed", 1)
+    emit_analysis_progress(
+        phase="sources", status="running", provider=provider,
+        completed=completed_projects, total=plan["selected_count"],
+        message="Building authoritative candidate intake",
+        detail=f"{len(active_sources)} sources · {len(dossiers)} provider dossiers",
+    )
+    append_private_line(
+        log_path,
+        f"{dt.datetime.now(dt.timezone.utc).isoformat().replace('+00:00', 'Z')} "
+        f"PHASE_START provider={provider} type=candidate-discovery",
+    )
+    discovery_result = run_tracked_command(
+        discovery_command, provider, model=models[provider], profile=profile_name,
+        execution_mode=mode_name, capture_path=discovery_output,
+        event_log_path=log_path,
+    )
+    intake_error = ""
+    if discovery_result == 0:
+        try:
+            validate_candidate_intake(
+                candidate_intake_path, technology_scope, active_source_ids, dossiers,
+            )
+        except (OSError, ValueError) as error:
+            intake_error = str(error)
+            discovery_result = 2
+    if discovery_result != 0:
+        detail = intake_error or f"command exit {discovery_result}"
+        print(f"Candidate intake validation failed: {detail}", file=sys.stderr)
+        phase_results.append(
+            f"{provider} candidate discovery — failed ({detail})"
+        )
+        append_private_line(
+            log_path,
+            f"{dt.datetime.now(dt.timezone.utc).isoformat().replace('+00:00', 'Z')} "
+            f"PHASE_FINISH provider={provider} type=candidate-discovery status=failed "
+            f"detail={detail}",
+        )
+        emit_analysis_progress(
+            phase="sources", status="failed", provider=provider,
+            completed=completed_projects, total=plan["selected_count"],
+            message="Candidate intake validation failed", detail=detail,
+        )
+        return finish_run("failed", discovery_result)
+    phase_results.append(f"{provider} candidate discovery — completed (exit 0)")
+    append_private_line(
+        log_path,
+        f"{dt.datetime.now(dt.timezone.utc).isoformat().replace('+00:00', 'Z')} "
+        f"PHASE_FINISH provider={provider} type=candidate-discovery status=completed exit_code=0",
+    )
+    emit_analysis_progress(
+        phase="sources", status="completed", provider=provider,
+        completed=completed_projects, total=plan["selected_count"],
+        message="Candidate intake frozen",
+        detail=f"{candidate_intake_path.name} · end-to-end accounting enabled",
+    )
     canonical_paths = canonical_report_paths(started_at)
     staged_paths = staged_report_paths(run_directory, canonical_paths)
     staged_before = {
@@ -1592,7 +1738,8 @@ def run_ai_check(
         provider, profile_name, mode_name, non_interactive=True,
         prompt=consolidation_prompt(
             provider, plan_path, dossiers, evidence_state_path, mode_name,
-            candidate_ledger_path, staged_paths,
+            candidate_ledger_path, staged_paths, candidate_intake_path,
+            finding_presentation,
         ),
     )
     if command is None:
@@ -1645,14 +1792,14 @@ def run_ai_check(
         expected_project_ids = [
             item["id"] for projects in plan["groups"].values() for item in projects
         ]
-        active_source_ids = [str(source["id"]) for source in active_sources]
         reports_valid, report_validation, baseline_results, successful_sources = (
             validate_staged_analysis_artifacts(
-                staged_paths, staged_before, candidate_ledger_path,
+                staged_paths, staged_before, candidate_ledger_path, candidate_intake_path,
                 evidence_state_path, technology_scope, baseline_keys,
                 active_source_ids, plan["baseline_windows"],
                 expected_project_ids=expected_project_ids,
                 prior_daily_text=prior_daily_text,
+                finding_presentation=finding_presentation,
             )
         )
         append_private_line(
@@ -1672,6 +1819,7 @@ def run_ai_check(
                 prompt=correction_prompt(
                     provider, plan_path, coordinator_output, candidate_ledger_path,
                     evidence_state_path, staged_paths, report_validation, mode_name,
+                    candidate_intake_path,
                 ),
             )
             correction_result = 1
@@ -1715,10 +1863,12 @@ def run_ai_check(
                 reports_valid, report_validation, baseline_results, successful_sources = (
                     validate_staged_analysis_artifacts(
                         staged_paths, staged_before, candidate_ledger_path,
+                        candidate_intake_path,
                         evidence_state_path, technology_scope, baseline_keys,
                         active_source_ids, plan["baseline_windows"],
                         expected_project_ids=expected_project_ids,
                         prior_daily_text=prior_daily_text,
+                        finding_presentation=finding_presentation,
                     )
                 )
                 append_private_line(

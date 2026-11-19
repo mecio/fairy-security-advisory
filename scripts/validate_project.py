@@ -128,6 +128,30 @@ def main() -> int:
             fail("reports.release_metadata.online_enabled must be a boolean", errors)
         if not isinstance(negative_ttl, int) or isinstance(negative_ttl, bool) or not 1 <= negative_ttl <= 365:
             fail("reports.release_metadata.negative_ttl_days must be an integer from 1 to 365", errors)
+    finding_presentation = (reports_config.get("reports", {}) or {}).get(
+        "finding_presentation", {},
+    )
+    if not isinstance(finding_presentation, dict):
+        fail("reports.finding_presentation must be a mapping", errors)
+    else:
+        actionable = finding_presentation.get("actionable_threshold", 80)
+        review = finding_presentation.get("review_threshold", 50)
+        collapse = finding_presentation.get("collapse_below_threshold", 50)
+        for name, value in (
+            ("actionable_threshold", actionable),
+            ("review_threshold", review),
+            ("collapse_below_threshold", collapse),
+        ):
+            if not isinstance(value, int) or isinstance(value, bool) or not 0 <= value <= 100:
+                fail(f"reports.finding_presentation.{name} must be an integer from 0 to 100", errors)
+        if isinstance(actionable, int) and isinstance(review, int) and review > actionable:
+            fail(
+                "reports.finding_presentation.review_threshold cannot exceed actionable_threshold",
+                errors,
+            )
+        for name, default in (("notify_below_threshold", False), ("show_weak_signals", False)):
+            if not isinstance(finding_presentation.get(name, default), bool):
+                fail(f"reports.finding_presentation.{name} must be a boolean", errors)
     agents_config = load_config_file(
         effective_config_path(config_dir, "ai-agents.yaml"), errors,
     )

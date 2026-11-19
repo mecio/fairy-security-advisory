@@ -11,6 +11,14 @@ other configured source evidence.
   its URL, title, identifiers, affected and fixed versions, prerequisites,
   publication date, and extraction outcome before drawing an applicability
   conclusion.
+- Freeze discovered advisories in the launcher-supplied candidate intake before
+  consolidation. Preserve `candidate_id`, the exact bulletin/advisory ID,
+  source record ID, URL, and every CVE/GHSA identifier. A coordinator may add
+  applicability evidence but may not replace a specific candidate with a
+  generic technology advisory.
+- CVE syntax has four or more digits after the year. A long serial such as
+  `CVE-2026-109618` is valid syntax; verify it against sources instead of
+  rejecting it because of its length.
 - A reachable index page, bounded API page, truncated response, blocked page,
   or unparsed bulletin is partial coverage. Record the limitation and do not
   advance the source checkpoint.
@@ -19,8 +27,9 @@ other configured source evidence.
   Open the bulletin and confirm it with the primary vendor/project or CVE
   record whenever available.
 - If a source reveals an advisory relevant to a selected technology, add it to
-  the applicability ledger immediately. Later source failures may lower
-  coverage confidence but may not remove that candidate.
+  the candidate intake immediately and carry it into the applicability ledger.
+  Later source failures may lower coverage confidence but may not remove that
+  candidate.
 - If source access is unavailable, distinguish “not retrieved” from
   “not applicable”. Report the former as a coverage limitation and preserve
   any candidate evidence already collected.
