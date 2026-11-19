@@ -7,9 +7,19 @@ description: Run AI-assisted periodic security advisory checks by correlating pu
 
 Run a repeatable, evidence-based, read-only check against inventoried projects. Write only to local configuration and outputs in this repository.
 
+## Mandatory directives
+
+Before an advisory check, read [directives/README.md](references/directives/README.md)
+and every directive it routes to for the current phase. These directives define
+non-negotiable applicability, source-coverage, consolidation, and receipt
+rules. They take precedence over an analyst's confidence judgment: confidence
+may qualify a conclusion but must never remove a populated inventory version
+or an in-scope source candidate from analysis.
+
 ## Start
 
-1. Locate the repository root from the skill directory and read `AGENTS.md`,
+1. Locate the repository root from the skill directory, read the mandatory
+   directives above, then read `AGENTS.md`,
    the effective configuration, preferring files under `config/local/` and
    falling back to the versioned factory files in `config/`,
    `output/followup.md`, archived follow-ups under

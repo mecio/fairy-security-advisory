@@ -61,6 +61,12 @@ advisory URL is known. Use either a raw HTTPS URL or a Markdown link such as
 uses that source and otherwise links recognized CVE identifiers to their
 official CVE records.
 
+Use one row for one consolidated issue or remediation activity. When it affects
+multiple projects, put every distinct project ID in that row's `Project` cell,
+separated by semicolons (for example, `api; worker`); do not duplicate the row
+only to name another affected project. Keep separate rows only when the work,
+evidence, owner, status, or completion criteria are genuinely different.
+
 An administrator confirmation may produce `Externally closed`, but it must state
 that this project did not independently verify production. A mitigation normally
 produces `Monitor` or `Completed in code`, not production vulnerability closure.

@@ -16,9 +16,10 @@ import yaml
 from desktop.services import (
     ConfigurationError, accept_eula, agent_authentication, agent_usage_status, analysis_routing,
     archive_and_reset_reports, assistant_prompt,
-    analysis_run_entries, analysis_run_files, assistant_command, delete_analysis_run,
+    analysis_run_entries, analysis_run_exclusions, analysis_run_files, assistant_command, delete_analysis_run,
     eula_accepted, extract_issue_update, project_metadata,
-    followup_source_links, proposal_changes, security_statistics, update_followup_activity,
+    followup_project_names, followup_source_links, proposal_changes, security_statistics,
+    update_followup_activity,
     read_analysis_run_file, restore_factory_configuration, validate_config_text,
     write_config_text, update_manual_technologies, technology_names,
     inventory_technology_labels,
@@ -229,9 +230,14 @@ class DesktopConfigurationServicesTest(unittest.TestCase):
                 encoding="utf-8",
             )
             (run / "run.log").write_text("START\nFINISH\n", encoding="utf-8")
+            (run / "candidate-ledger.json").write_text(json.dumps({"schema_version": 1, "candidates": [{
+                "advisory_id": "CVE-TEST-1", "project_id": "legacy", "declared_value": ">=7.2",
+                "decision": "not-applicable", "decision_reason": "Confirmed absent prerequisite",
+            }]}), encoding="utf-8")
             with patch("desktop.services.ANALYSIS_RUNS_DIR", root):
                 entries = analysis_run_entries()
                 files = analysis_run_files(run)
+                exclusions = analysis_run_exclusions(run)
                 content = read_analysis_run_file(run / "run.log")
                 removed = delete_analysis_run(run)
 
@@ -239,7 +245,8 @@ class DesktopConfigurationServicesTest(unittest.TestCase):
             self.assertEqual(entries[0]["year"], "2026")
             self.assertEqual(entries[0]["month"], "11")
             self.assertEqual(entries[0]["status"], "completed")
-            self.assertEqual([path.name for path in files], ["run-summary.txt", "run.log"])
+            self.assertEqual([path.name for path in files], ["run-summary.txt", "run.log", "candidate-ledger.json"])
+            self.assertEqual(exclusions[0]["reason"], "Confirmed absent prerequisite")
             self.assertEqual(content, "START\nFINISH\n")
             self.assertEqual(removed, "20261116T180000Z-42")
             self.assertFalse(run.exists())
@@ -355,6 +362,15 @@ class DesktopConfigurationServicesTest(unittest.TestCase):
         self.assertNotIn("--approve-for-me", command)
         self.assertLess(command.index("--ask-for-approval"), command.index("exec"))
 
+    def test_issue_assistant_is_restricted_to_the_selected_finding(self) -> None:
+        prompt = assistant_prompt(
+            {"ID": "FA-1", "Advisory / CVE": "CVE-2026-1", "Project": "api"},
+            "Parliamo dello spazio interstellare", [],
+        )
+        self.assertIn("complete topic boundary", prompt)
+        self.assertIn("unrelated subject", prompt)
+        self.assertIn("Do not invent a connection", prompt)
+
     def test_project_metadata_is_loaded_from_the_version_file(self) -> None:
         metadata = project_metadata()
         self.assertEqual(metadata["name"], "fAIry Security Advisory")
@@ -430,6 +446,12 @@ class DesktopConfigurationServicesTest(unittest.TestCase):
             self.assertEqual(statistics["projects"], {"api": 2})
             self.assertEqual(statistics["priorities"], {"High": 1, "Medium": 1})
             self.assertEqual(statistics["languages"], {"JavaScript": 1, "PHP": 1, "Python": 1})
+
+    def test_followup_projects_are_distinct(self) -> None:
+        self.assertEqual(
+            followup_project_names({"Project": "api; worker; API"}),
+            ["api", "worker"],
+        )
 
     def test_ai_proposal_is_separate_from_confirmed_followup_update(self) -> None:
         response, proposal = extract_issue_update(

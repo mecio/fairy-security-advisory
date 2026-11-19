@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: 2026 fAIry Security Advisory contributors
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
+import json
 import os
 import sys
 from pathlib import Path
@@ -662,6 +663,14 @@ class DesktopWindowTest(unittest.TestCase):
                 encoding="utf-8",
             )
             (run / "run.log").write_text("START\nFINISH\n", encoding="utf-8")
+            (run / "candidate-ledger.json").write_text(json.dumps({
+                "schema_version": 1,
+                "candidates": [{
+                    "advisory_id": "CVE-TEST-1", "project_id": "legacy",
+                    "declared_value": ">=7.2", "decision": "not-applicable",
+                    "decision_reason": "Confirmed absent prerequisite",
+                }],
+            }), encoding="utf-8")
             with patch("desktop.services.ANALYSIS_RUNS_DIR", root):
                 window = MainWindow()
                 window.navigation.setCurrentRow(4)
@@ -670,6 +679,12 @@ class DesktopWindowTest(unittest.TestCase):
                 window.logs_tree.setCurrentItem(run_item)
                 application.processEvents()
                 self.assertIn("Run ID: 20261116T180000Z-42", window.analysis_log_viewer.toPlainText())
+                self.assertIn(
+                    "candidate-ledger.json",
+                    [window.log_file_combo.itemText(index) for index in range(window.log_file_combo.count())],
+                )
+                self.assertIn("CVE-TEST-1", window.analysis_log_exclusions.text())
+                self.assertIn("Confirmed absent prerequisite", window.analysis_log_exclusions.text())
                 self.assertTrue(window.delete_log_button.isEnabled())
                 with patch(
                     "desktop.main_window.QMessageBox.question",
@@ -844,6 +859,45 @@ class DesktopWindowTest(unittest.TestCase):
         save.assert_called_once_with({
             "/private/api": {"enabled": True, "preferred_ai": "codex"},
         })
+        window.close()
+        window.deleteLater()
+        application.processEvents()
+
+    def test_inventory_filters_combine_selection_ai_and_technology(self) -> None:
+        application = QApplication.instance() or QApplication([])
+        projects = [
+            {
+                "id": "api", "path": "/private/api",
+                "languages": [{"name": "PHP"}],
+                "advisory_checks": {"enabled": True, "preferred_ai": "codex"},
+            },
+            {
+                "id": "worker", "path": "/private/worker",
+                "languages": [{"name": "Python"}],
+                "advisory_checks": {"enabled": False, "preferred_ai": "claude"},
+            },
+            {
+                "id": "web", "path": "/private/web",
+                "languages": [{"name": "PHP"}],
+                "advisory_checks": {"enabled": True},
+            },
+        ]
+        with patch("desktop.main_window.services.inventory_projects", return_value=projects), patch(
+            "desktop.main_window.services.inventory_age", return_value="current",
+        ):
+            window = MainWindow()
+            window.load_inventory()
+
+        window.inventory_selected_filter.setChecked(True)
+        self.assertFalse(window.inventory_tree.topLevelItem(0).isHidden())
+        self.assertTrue(window.inventory_tree.topLevelItem(1).isHidden())
+        self.assertFalse(window.inventory_tree.topLevelItem(2).isHidden())
+        window.inventory_ai_filter.setCurrentIndex(window.inventory_ai_filter.findData("codex"))
+        self.assertFalse(window.inventory_tree.topLevelItem(0).isHidden())
+        self.assertTrue(window.inventory_tree.topLevelItem(2).isHidden())
+        window.inventory_technology_filter.setText("php")
+        self.assertFalse(window.inventory_tree.topLevelItem(0).isHidden())
+        self.assertIn("1 shown", window.inventory_count.text())
         window.close()
         window.deleteLater()
         application.processEvents()
@@ -1195,6 +1249,16 @@ class DesktopWindowTest(unittest.TestCase):
             self.assertIn("PHP2Shell in PHP runtime", window.followup_table.cellWidget(0, 0).text())
             self.assertIn("CVE-2026-1234", window.followup_table.cellWidget(0, 0).text())
             self.assertIn("https://example.com/advisory", window.followup_table.cellWidget(0, 0).text())
+
+            followup.write_text(
+                "| ID | Advisory / CVE | Project | Description | Priority | Owner | Status | Opened | Last updated | Next action | Due date | Completion evidence |\n"
+                "|---|---|---|---|---|---|---|---|---|---|---|---|\n"
+                "| A-1 | CVE-2026-1234 | api; worker; API | Patch | High | Dev | Open | 2026-11-01 | 2026-11-01 | Upgrade | — | — |\n",
+                encoding="utf-8",
+            )
+            window.load_followup_table(followup)
+            self.assertEqual(window.followup_table.rowCount(), 1)
+            self.assertEqual(window.followup_table.item(0, 1).text(), "api\nworker")
         window.close()
         window.deleteLater()
         application.processEvents()

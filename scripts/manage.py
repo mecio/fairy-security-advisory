@@ -86,6 +86,10 @@ try:
 except ImportError:
     from scripts.release_cache import ReleaseCacheError, export_shared_candidates, resolve_release_metadata
 try:
+    from advisory_guardrails import validate_candidate_ledger
+except ImportError:
+    from scripts.advisory_guardrails import validate_candidate_ledger
+try:
     from technology_state import (
         baseline_windows, collect_technology_scope, incremental_since, load_state_for_run, prune_inactive_baselines,
         record_completed_baselines, record_source_successes, save_state, scan_rows, StateError,
@@ -903,10 +907,19 @@ def scoped_evidence_prompt(
 
 def consolidation_prompt(
     provider: str, plan_path: Path, dossiers: list[Path], evidence_state_path: Path | None = None,
-    execution_mode: str | None = None,
+    execution_mode: str | None = None, candidate_ledger_path: Path | None = None,
+    staged_paths: dict[str, Path] | None = None,
 ) -> str:
     evidence_state_path = evidence_state_path or plan_path.with_name("evidence-state.json")
     dossier_lines = "\n".join(f"- {path}" for path in dossiers) or "- none"
+    ledger_path = candidate_ledger_path or plan_path.with_name("candidate-ledger.json")
+    staging = ""
+    if staged_paths:
+        staging = (
+            "Write only to these staging files, never to canonical output paths: "
+            + "; ".join(f"{name}={path}" for name, path in staged_paths.items())
+            + ". Do not archive follow-ups during staging.\n"
+        )
     return (
         f"{AI_PROMPTS[provider]}\n\n"
         "Run in routed consolidation mode. The JSON plan below is the authoritative "
@@ -915,6 +928,7 @@ def consolidation_prompt(
         f"projects assigned to {provider} directly. Read and critically verify the "
         "read-only dossiers produced by other providers, deduplicate all findings, then "
         "update the canonical daily report, summary, follow-up, and archive exactly once. "
+        + staging +
         "In the newest daily report section 'Projects and technologies involved', "
         "include one line '- Project: `<id>` — ...' for every selected project "
         "in every provider group, including projects with no confirmed findings. "
@@ -942,11 +956,20 @@ def consolidation_prompt(
         "For every key in baseline_scan, include a line '- Technology key: `<key>` — ...' in the "
         "Initialization baseline section. Write a machine-readable JSON coverage receipt to the "
         f"exact path {evidence_state_path} with schema_version 1, a baselines list containing every "
-        "selected key exactly once with status completed, partial, or failed. Every completed "
+        "selected key exactly once with status completed, partial, or failed. Each baseline entry "
+        "MUST use the JSON field `key` (not `technology_key`), for example "
+        '{"key":"<technology key>","status":"partial"}. Each source entry MUST use the JSON field '
+        '`id` (not `source_id`), for example {"id":"<source ID>","status":"partial"}. Every completed '
         "baseline must also contain baseline_version, ISO-8601 release_date, searched_since, searched_until, "
         "and an HTTPS release_source_url; "
         "searched_since must be no later than the release date. Use partial when an official "
-        "release date or full historical coverage cannot be established. Include a sources list "
+        "release date or full historical coverage cannot be established. "
+        f"Write a candidate ledger to {ledger_path}: schema_version 1 and one entry per "
+        "candidate/project technology decision with advisory_id, source_id, project_id, technology_key, declared_value, "
+        "affected_range, range_relation (overlaps, disjoint, unresolved), prerequisite_status, decision_reason, and "
+        "decision (immediate-action, follow-up, monitor, not-applicable). A populated declared "
+        "range that overlaps or cannot be resolved against an affected range must not be not-applicable. "
+        "Include a sources list "
         "containing every configured active source ID exactly once with status complete, partial, "
         "or failed. Mark a source complete only when advisory content coverage, not mere reachability, "
         "succeeded. "
@@ -975,6 +998,28 @@ def canonical_report_paths(started_at: dt.datetime) -> dict[str, Path]:
         "summary": ROOT / str(reports.get("summary_file", "output/check-summary.md")),
         "follow-up": ROOT / str(reports.get("followup_file", "output/followup.md")),
     }
+
+
+def staged_report_paths(run_directory: Path, canonical_paths: dict[str, Path]) -> dict[str, Path]:
+    """Prepare private report copies for AI consolidation before publication."""
+    staging = run_directory / "staging"
+    paths: dict[str, Path] = {}
+    for name, canonical in canonical_paths.items():
+        staged = staging / canonical.name
+        staged.parent.mkdir(parents=True, exist_ok=True)
+        if canonical.is_file():
+            shutil.copy2(canonical, staged)
+            staged.chmod(0o600)
+        paths[name] = staged
+    return paths
+
+
+def promote_staged_reports(staged_paths: dict[str, Path], canonical_paths: dict[str, Path]) -> None:
+    """Atomically publish only validated staged reports."""
+    for name, staged in staged_paths.items():
+        if not staged.is_file():
+            raise OSError(f"staged {name} is missing")
+        write_private_text(canonical_paths[name], staged.read_text(encoding="utf-8"))
 
 
 def report_signature(path: Path) -> str | None:
@@ -1453,18 +1498,21 @@ def run_ai_check(
         )
         dossiers.append(dossier)
     canonical_paths = canonical_report_paths(started_at)
-    canonical_before = {
-        name: report_signature(path) for name, path in canonical_paths.items()
+    staged_paths = staged_report_paths(run_directory, canonical_paths)
+    staged_before = {
+        name: report_signature(path) for name, path in staged_paths.items()
     }
-    daily_path = canonical_paths["daily report"]
+    daily_path = staged_paths["daily report"]
     prior_daily_text = (
         daily_path.read_text(encoding="utf-8", errors="replace")
         if daily_path.is_file() else None
     )
+    candidate_ledger_path = run_directory / "candidate-ledger.json"
     command = ai_command(
         provider, profile_name, mode_name, non_interactive=True,
         prompt=consolidation_prompt(
             provider, plan_path, dossiers, evidence_state_path, mode_name,
+            candidate_ledger_path, staged_paths,
         ),
     )
     if command is None:
@@ -1504,7 +1552,7 @@ def run_ai_check(
     completion_status = "completed"
     if result == 0:
         reports_valid, report_validation = validate_canonical_report_updates(
-            canonical_paths, canonical_before,
+            staged_paths, staged_before,
             expected_project_ids=[
                 item["id"] for projects in plan["groups"].values() for item in projects
             ],
@@ -1513,6 +1561,10 @@ def run_ai_check(
         )
         if reports_valid:
             try:
+                validate_candidate_ledger(
+                    candidate_ledger_path, technology_scope, staged_paths["daily report"],
+                    staged_paths["follow-up"],
+                )
                 baseline_results, successful_sources = validate_evidence_state(
                     evidence_state_path, baseline_keys,
                     [str(source["id"]) for source in active_sources],
@@ -1542,6 +1594,12 @@ def run_ai_check(
                 report_validation += "; every selected baseline failed"
             else:
                 completion_status = coverage_status
+                try:
+                    promote_staged_reports(staged_paths, canonical_paths)
+                    archive_closed_followups(ROOT)
+                except OSError as error:
+                    result = 3
+                    report_validation += f"; unable to promote staged reports: {error}"
             append_private_line(
                 log_path,
                 f"{dt.datetime.now(dt.timezone.utc).isoformat().replace('+00:00', 'Z')} "

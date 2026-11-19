@@ -278,7 +278,7 @@ class MainWindow(QMainWindow):
         metadata = services.project_metadata()
         self.setWindowTitle(f"{metadata['name']} {metadata['version']}")
         self.resize(1280, 820)
-        self.setMinimumSize(980, 680)
+        self.setMinimumSize(980, 700)
         self.setStyleSheet(STYLE)
         self.process = QProcess(self)
         self.process.setWorkingDirectory(str(services.ROOT))
@@ -843,6 +843,31 @@ class MainWindow(QMainWindow):
             "Technology inventory",
             "Choose projects and AI providers, and keep inventory and production versions distinct.",
         )
+        filters = QHBoxLayout()
+        self.inventory_selected_filter = QCheckBox("Selected projects only")
+        self.inventory_selected_filter.setToolTip(
+            "Show only projects currently selected for advisory checks"
+        )
+        self.inventory_selected_filter.toggled.connect(self.apply_inventory_filters)
+        filters.addWidget(self.inventory_selected_filter)
+        filters.addWidget(QLabel("Preferred AI:"))
+        self.inventory_ai_filter = QComboBox()
+        self.inventory_ai_filter.addItem("Any", None)
+        self.inventory_ai_filter.addItem("No preference", "")
+        self.inventory_ai_filter.addItem("Codex", "codex")
+        self.inventory_ai_filter.addItem("Claude", "claude")
+        self.inventory_ai_filter.setToolTip("Filter by the project's preferred AI provider")
+        self.inventory_ai_filter.currentIndexChanged.connect(self.apply_inventory_filters)
+        filters.addWidget(self.inventory_ai_filter)
+        self.inventory_technology_filter = QLineEdit()
+        self.inventory_technology_filter.setPlaceholderText("Filter technologies…")
+        self.inventory_technology_filter.setClearButtonEnabled(True)
+        self.inventory_technology_filter.setToolTip(
+            "Show projects whose technology inventory contains this text"
+        )
+        self.inventory_technology_filter.textChanged.connect(self.apply_inventory_filters)
+        filters.addWidget(self.inventory_technology_filter, 1)
+        layout.addLayout(filters)
         self.inventory_tree = QTreeWidget()
         self.inventory_tree.setHeaderLabels((
             "Check", "Project", "Preferred AI", "Roles", "Technologies", "Path",
@@ -966,6 +991,11 @@ class MainWindow(QMainWindow):
         file_row.addWidget(self.log_file_combo)
         file_row.addStretch()
         viewer_layout.addLayout(file_row)
+        self.analysis_log_exclusions = QLabel()
+        self.analysis_log_exclusions.setWordWrap(True)
+        self.analysis_log_exclusions.setStyleSheet("color:#e5bb62; padding:4px 2px;")
+        self.analysis_log_exclusions.setVisible(False)
+        viewer_layout.addWidget(self.analysis_log_exclusions)
         self.analysis_log_viewer = QPlainTextEdit()
         self.analysis_log_viewer.setReadOnly(True)
         self.analysis_log_viewer.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
@@ -1723,6 +1753,7 @@ class MainWindow(QMainWindow):
             preference.setCurrentIndex(max(0, selected))
             preference.setToolTip("Optional preferred AI for this project's advisory analysis")
             self.inventory_tree.setItemWidget(item, 2, preference)
+            preference.currentIndexChanged.connect(self.apply_inventory_filters)
         self.inventory_tree.blockSignals(False)
         self.update_inventory_count()
         self._update_inventory_technology_action()
@@ -1866,13 +1897,32 @@ class MainWindow(QMainWindow):
         )
 
     def update_inventory_count(self, _item: QTreeWidgetItem | None = None, _column: int = 0) -> None:
+        self.apply_inventory_filters()
+
+    def apply_inventory_filters(self, *_args: object) -> None:
+        """Hide inventory rows that do not match the current view-only filters."""
         total = self.inventory_tree.topLevelItemCount()
         enabled = sum(
             self.inventory_tree.topLevelItem(index).checkState(0) == Qt.CheckState.Checked
             for index in range(total)
         )
+        selected_only = self.inventory_selected_filter.isChecked()
+        preferred_ai = self.inventory_ai_filter.currentData()
+        technology = self.inventory_technology_filter.text().casefold().strip()
+        visible = 0
+        for index in range(total):
+            item = self.inventory_tree.topLevelItem(index)
+            selector = self.inventory_tree.itemWidget(item, 2)
+            item_ai = selector.currentData() if isinstance(selector, QComboBox) else ""
+            hidden = bool(
+                (selected_only and item.checkState(0) != Qt.CheckState.Checked)
+                or (preferred_ai is not None and item_ai != preferred_ai)
+                or (technology and technology not in item.text(4).casefold())
+            )
+            item.setHidden(hidden)
+            visible += not hidden
         self.inventory_count.setText(
-            f"{enabled} of {total} selected · inventory {services.inventory_age()}"
+            f"{enabled} of {total} selected · {visible} shown · inventory {services.inventory_age()}"
         )
 
     def save_inventory_preferences(self) -> None:
@@ -2037,9 +2087,23 @@ class MainWindow(QMainWindow):
         self.log_run_files = []
         if path_text:
             try:
-                self.log_run_files = services.analysis_run_files(Path(str(path_text)))
+                run_path = Path(str(path_text))
+                self.log_run_files = services.analysis_run_files(run_path)
+                exclusions = services.analysis_run_exclusions(run_path)
+                if exclusions:
+                    details = "\n".join(
+                        f"• {item['advisory']} · {item['project']} · {item['version']} — {item['reason']}"
+                        for item in exclusions
+                    )
+                    self.analysis_log_exclusions.setText(
+                        f"Excluded candidates ({len(exclusions)}):\n{details}"
+                    )
+                    self.analysis_log_exclusions.setVisible(True)
+                else:
+                    self.analysis_log_exclusions.setVisible(False)
             except (OSError, services.ConfigurationError) as error:
                 self.analysis_log_viewer.setPlainText(str(error))
+                self.analysis_log_exclusions.setVisible(False)
             else:
                 self.log_file_combo.addItems([path.name for path in self.log_run_files])
         self.log_file_combo.blockSignals(False)
@@ -2119,8 +2183,9 @@ class MainWindow(QMainWindow):
                 + ("\n" + "\n".join(url for _label, url in source_links) if source_links else "")
             )
             self.followup_table.setCellWidget(row, 0, activity_label)
+            projects = "\n".join(services.followup_project_names(activity))
             values = (
-                activity.get("Project", ""), activity.get("Priority", ""),
+                projects, activity.get("Priority", ""),
                 activity.get("Owner", ""), activity.get("Status", ""),
                 activity.get("Next action", ""),
             )

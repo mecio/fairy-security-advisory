@@ -338,6 +338,11 @@ routes that project to the matching CLI and to that provider's model in the
 selected profile. Click **Save** to write these choices to
 ignored local configuration.
 
+Use the inventory filters to narrow the table without changing it: **Selected
+projects only** keeps checked rows, **Preferred AI** limits rows by provider,
+and the technology field matches the technology inventory text. Filters can be
+combined; hidden rows remain part of the inventory and are still saved.
+
 Select a project and open **Details**. The
 **Inventory technologies** tab lists detected technologies, manual changes,
 and exclusions. Select a row and click **Edit selected**, or double-click the
@@ -444,6 +449,10 @@ project, description, priority,
 owner, state, dates, next action, deadline, and completion evidence. Hover over
 shortened cells to read their full value.
 
+When the same issue applies to multiple projects with the same follow-up work,
+it remains one row. Its **Project** cell lists every affected project on a
+separate line; the saved follow-up record uses semicolons between project IDs.
+
 The activity/advisory cell puts the issue title first, followed by its stable
 ID, advisory/CVE identifiers, and configured primary-source links. Use the
 title as a search phrase and the linked advisory to verify the details. When
@@ -472,8 +481,10 @@ The **Logs** page presents completed and failed analysis runs as an archive tree
 organized by year, month, and run. New runs are stored physically below
 `output/analysis-runs/YYYY/MM/<run-id>/`; legacy flat run directories remain
 readable. Selecting a run opens `run-summary.txt` first. Use the file selector
-to inspect its chronological `run.log`, routing `plan.json`, coordinator output,
-and provider evidence dossiers.
+to inspect its chronological `run.log`, routing `plan.json`, candidate ledger,
+coordinator output, and provider evidence dossiers. When a current run ledger
+records `not-applicable` decisions, the viewer also lists their advisory,
+project, declared version, and recorded reason above the file content.
 
 **Delete selected run…** permanently removes only the selected run directory
 after confirmation. This includes its summary, log, plan, coordinator output,
@@ -494,6 +505,11 @@ For follow-up work, it is intended for questions such as how to validate
 applicability, what evidence is still missing, which remediation order is
 safest, who has taken ownership, or why an advisory is not relevant to a
 specific project.
+
+Each conversation is restricted to its selected finding or technology-version
+investigation. The assistant declines unrelated subjects and redirects the user
+to the current security context; select another issue explicitly to change the
+conversation boundary.
 
 Before sending a message:
 

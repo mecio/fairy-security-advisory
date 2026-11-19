@@ -13,11 +13,24 @@ from scripts.manage import (
     prepare_analysis_service, refresh_inventory,
     render_cli_banner, run_ai_check,
     scoped_evidence_prompt, source_request, validate_canonical_report_updates,
+    promote_staged_reports, staged_report_paths,
 )
 from scripts.sandbox_preflight import claude_sandbox_settings
 
 
 class AdvisorySourceRequestTest(unittest.TestCase):
+    def test_staged_reports_are_not_published_until_promoted(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            canonical = {"daily report": root / "output/daily.md"}
+            canonical["daily report"].parent.mkdir(parents=True)
+            canonical["daily report"].write_text("old", encoding="utf-8")
+            staged = staged_report_paths(root / "run", canonical)
+            staged["daily report"].write_text("new", encoding="utf-8")
+            self.assertEqual(canonical["daily report"].read_text(encoding="utf-8"), "old")
+            promote_staged_reports(staged, canonical)
+            self.assertEqual(canonical["daily report"].read_text(encoding="utf-8"), "new\n")
+
     def test_coverage_status_distinguishes_limitations_and_total_failure(self) -> None:
         self.assertEqual(
             coverage_completion_status({"one": "completed"}, ["one"], 2, 2),
@@ -307,6 +320,13 @@ class AdvisorySourceRequestTest(unittest.TestCase):
                 self.assertIn("Do not read output/report-resets/", prompt)
                 self.assertIn("manual backups, not current evidence", prompt)
 
+    def test_consolidation_prompt_requires_receipt_schema_field_names(self) -> None:
+        prompt = consolidation_prompt("codex", Path("output/analysis-runs/plan.json"), [])
+        self.assertIn('"key":"<technology key>"', prompt)
+        self.assertIn("not `technology_key`", prompt)
+        self.assertIn('"id":"<source ID>"', prompt)
+        self.assertIn("not `source_id`", prompt)
+
     @patch("scripts.manage.prepare_analysis_service", return_value=True)
     @patch("scripts.manage.check_prerequisites", return_value=0)
     @patch("scripts.manage.configured_models", return_value=(
@@ -340,7 +360,9 @@ class AdvisorySourceRequestTest(unittest.TestCase):
                 capture.parent.mkdir(parents=True, exist_ok=True)
                 capture.write_text("# Evidence\n", encoding="utf-8")
             if provider == "codex":
-                for name, path in canonical_paths.items():
+                staging = capture.parent / "staging"
+                for name, canonical in canonical_paths.items():
+                    path = staging / canonical.name
                     path.parent.mkdir(parents=True, exist_ok=True)
                     content = (
                         "# Daily report\n\n### Projects and technologies involved\n"
@@ -352,6 +374,9 @@ class AdvisorySourceRequestTest(unittest.TestCase):
                 (capture.parent / "evidence-state.json").write_text(
                     '{"schema_version":1,"baselines":[],"sources":[]}',
                     encoding="utf-8",
+                )
+                (capture.parent / "candidate-ledger.json").write_text(
+                    '{"schema_version":1,"candidates":[]}', encoding="utf-8",
                 )
             return 0
 
@@ -370,7 +395,9 @@ class AdvisorySourceRequestTest(unittest.TestCase):
                 "scripts.manage.safe_load_yaml", return_value=config,
             ), patch(
                 "scripts.manage.run_tracked_command", side_effect=tracked,
-            ) as run:
+            ) as run, patch(
+                "scripts.manage.archive_closed_followups", return_value={"archived": 0},
+            ):
                 result = run_ai_check(
                     "codex", "balanced", "economical", assume_yes=True,
                     non_interactive=True,
