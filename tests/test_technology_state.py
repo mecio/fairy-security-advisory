@@ -325,6 +325,26 @@ class TechnologyStateTest(unittest.TestCase):
         self.assertEqual(len(scope), 1)
         self.assertEqual(scope[0]["projects"], ["one", "two"])
 
+    def test_legacy_composer_php_dependency_merges_with_runtime_baseline(self) -> None:
+        config = {"inventory": {"projects": [{
+            "id": "app",
+            "technology_inventory": [
+                {"category": "dependencies", "name": "php", "version": ">=7.2",
+                 "source": "declared"},
+                {"category": "runtimes", "name": "PHP", "version": ">=7.2",
+                 "source": "declared"},
+            ],
+        }]}}
+
+        scope = collect_technology_scope(config)
+
+        self.assertEqual(len(scope), 1)
+        self.assertEqual(
+            (scope[0]["category"], scope[0]["name"], scope[0]["version"]),
+            ("runtimes", "PHP", ">=7.2"),
+        )
+        self.assertNotIn("ecosystem", scope[0])
+
     def test_versioned_product_suppresses_unknown_language_or_service_alias(self) -> None:
         config = {"inventory": {"projects": [{
             "id": "one", "technology_inventory": [

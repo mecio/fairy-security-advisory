@@ -80,7 +80,7 @@ def split_container_image(value: str) -> tuple[str, str]:
 
 
 def technology_key(category: str, name: str, version: Any, ecosystem: str = "") -> str:
-    category, name = canonical_identity(category, name)
+    category, name, ecosystem = canonical_scope_identity(category, name, ecosystem)
     identity = json.dumps(
         [category.casefold(), ecosystem.casefold(), _clean(name).casefold(), normalize_version(version)],
         ensure_ascii=False, separators=(",", ":"),
@@ -95,6 +95,21 @@ def canonical_identity(category: str, name: str) -> tuple[str, str]:
     leaf = cleaned.rsplit("/", 1)[-1]
     product = PRODUCT_ALIASES.get(leaf) if category != "dependencies" else None
     return ("product", product) if product else (category, cleaned)
+
+
+def canonical_scope_identity(
+    category: str, name: str, ecosystem: str = "",
+) -> tuple[str, str, str]:
+    """Normalize identities used by advisory baselines, including Composer PHP."""
+    cleaned_ecosystem = _clean(ecosystem).casefold()
+    cleaned_name = _clean(name).casefold()
+    if (
+        category == "dependencies" and cleaned_name == "php"
+        and cleaned_ecosystem in {"", "composer"}
+    ):
+        return "product", "php", ""
+    canonical_category, canonical_name = canonical_identity(category, name)
+    return canonical_category, canonical_name, cleaned_ecosystem
 
 
 def ambiguous_manual_dependencies(
@@ -306,13 +321,15 @@ def collect_technology_scope(config: dict[str, Any]) -> list[dict[str, Any]]:
         inventory_records = project_technology_records(project)
         production_records = production_technology_records(project)
         versioned_products = {
-            (canonical_identity(record["category"], record["name"]),
-             _clean(record.get("ecosystem")).casefold())
+            canonical_scope_identity(
+                record["category"], record["name"], record.get("ecosystem", ""),
+            )
             for record in inventory_records if record.get("version")
         }
         for record in [*inventory_records, *production_records]:
-            identity = (canonical_identity(record["category"], record["name"]),
-                        _clean(record.get("ecosystem")).casefold())
+            identity = canonical_scope_identity(
+                record["category"], record["name"], record.get("ecosystem", ""),
+            )
             is_production = "environment" in record
             if not is_production and not record.get("version") and identity in versioned_products:
                 continue
@@ -330,6 +347,11 @@ def collect_technology_scope(config: dict[str, Any]) -> list[dict[str, Any]]:
                 field: value for field, value in record.items()
                 if field not in display_only_fields
             }
+            if identity[:2] == ("product", "php"):
+                scope_record["name"] = "PHP"
+                if record["category"] == "dependencies":
+                    scope_record["category"] = "runtimes"
+                    scope_record.pop("ecosystem", None)
             if not is_production:
                 # A user-selected version status is display metadata. Advisory
                 # scope uses the saved version and technical source unchanged.

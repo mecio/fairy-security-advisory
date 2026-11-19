@@ -565,7 +565,9 @@ The **Technology baselines** tab sits beside **Activity** and **Detailed log**
 and uses the full tab area for the selection table. Its list deduplicates identical technology/version
 combinations across selected projects. Missing baselines are preselected for a
 historical initialization scan; covered combinations remain available for a
-manual rescan. Historical coverage starts at the selected version's official
+manual rescan. Use **Filter technologies** to narrow the table by technology,
+version, context, baseline status, or project; filtering only changes visible
+rows and never changes their checkbox selections. Historical coverage starts at the selected version's official
 release date, while the same hybrid run retains a separate incremental window
 for already initialized technologies. Unknown versions receive a generic partial baseline and remain
 red in Inventory until a human supplies better evidence. Initialization and

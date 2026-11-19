@@ -13,6 +13,23 @@ from scripts.inventory import (
 
 
 class ProjectRootExclusionsTest(unittest.TestCase):
+    def test_composer_php_constraint_is_only_a_runtime_technology(self) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            project = Path(temporary_directory) / "app"
+            project.mkdir()
+            (project / "composer.json").write_text(
+                '{"require":{"php":">=7.2","vendor/package":"^1.0"}}',
+                encoding="utf-8",
+            )
+            result = analyze_project(project, project, (), 100)
+
+        php = [
+            item for item in result["technology_inventory"]
+            if item["name"].casefold() == "php" and item.get("version") == ">=7.2"
+        ]
+        self.assertEqual(len(php), 1)
+        self.assertEqual((php[0]["category"], php[0]["name"]), ("runtimes", "PHP"))
+
     def test_project_analysis_builds_versioned_technology_inventory_from_lockfile(self) -> None:
         with TemporaryDirectory() as temporary_directory:
             project = Path(temporary_directory) / "app"

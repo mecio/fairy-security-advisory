@@ -1205,6 +1205,18 @@ class MainWindow(QMainWindow):
         self.baseline_select_all.stateChanged.connect(self._set_all_baseline_checks)
         baseline_controls.addWidget(self.baseline_select_all)
         baseline_controls.addStretch()
+        baseline_controls.addWidget(QLabel("Filter"))
+        self.technology_baseline_filter = QLineEdit()
+        self.technology_baseline_filter.setPlaceholderText("Filter technologies…")
+        self.technology_baseline_filter.setClearButtonEnabled(True)
+        self.technology_baseline_filter.setToolTip(
+            "Filter baseline rows by technology, version, context, status, or project. "
+            "Filtering does not change checkbox selections."
+        )
+        self.technology_baseline_filter.textChanged.connect(
+            self.apply_technology_baseline_filter
+        )
+        baseline_controls.addWidget(self.technology_baseline_filter, 1)
 
         buttons = QHBoxLayout()
         prerequisites = QPushButton("Check prerequisites")
@@ -1775,6 +1787,7 @@ class MainWindow(QMainWindow):
             item.setForeground(4, QColor("#df6f6f"))
             item.setForeground(5, QColor("#df6f6f"))
             self.technology_scan_tree.addTopLevelItem(item)
+            self.apply_technology_baseline_filter()
             self._sync_baseline_toggle()
             return
         for row in rows:
@@ -1810,7 +1823,19 @@ class MainWindow(QMainWindow):
                 4, "Version evidence quality only; this is not a vulnerability status."
             )
             self.technology_scan_tree.addTopLevelItem(item)
+        self.apply_technology_baseline_filter()
         self._sync_baseline_toggle()
+
+    def apply_technology_baseline_filter(self, *_args: object) -> None:
+        if not hasattr(self, "technology_baseline_filter"):
+            return
+        query = self.technology_baseline_filter.text().casefold().strip()
+        for index in range(self.technology_scan_tree.topLevelItemCount()):
+            item = self.technology_scan_tree.topLevelItem(index)
+            searchable = " ".join(
+                item.text(column) for column in range(1, self.technology_scan_tree.columnCount())
+            ).casefold()
+            item.setHidden(bool(query and query not in searchable))
 
     def _baseline_checkable_items(self) -> list[QTreeWidgetItem]:
         return [

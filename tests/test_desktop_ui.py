@@ -523,6 +523,9 @@ class DesktopWindowTest(unittest.TestCase):
             ["Activity", "Technology baselines", "Detailed log"],
         )
         self.assertTrue(window.run_tabs.widget(1).isAncestorOf(window.technology_scan_tree))
+        self.assertTrue(
+            window.run_tabs.widget(1).isAncestorOf(window.technology_baseline_filter)
+        )
         self.assertGreater(window.technology_scan_tree.height(), 220)
         window.run_tabs.setCurrentIndex(2)
         application.processEvents()
@@ -536,6 +539,44 @@ class DesktopWindowTest(unittest.TestCase):
         self.assertEqual(window.run_journey.phase, "consolidation")
         self.assertTrue(window.run_journey.timer.isActive())
         window.run_journey.finish(True)
+        window.close()
+        window.deleteLater()
+        application.processEvents()
+
+    def test_technology_baseline_filter_hides_rows_without_changing_selection(self) -> None:
+        application = QApplication.instance() or QApplication([])
+        window = MainWindow()
+        window.technology_scan_tree.clear()
+        for key, technology, version, checked in (
+            ("php-key", "PHP", ">=7.2", True),
+            ("redis-key", "Redis", "7.4", False),
+        ):
+            item = QTreeWidgetItem((
+                "", technology, version, "Inventory", "Uncertain", "Missing", "app",
+            ))
+            item.setData(0, Qt.ItemDataRole.UserRole, key)
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            item.setCheckState(
+                0, Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked,
+            )
+            window.technology_scan_tree.addTopLevelItem(item)
+
+        window.technology_baseline_filter.setText("php")
+        application.processEvents()
+
+        self.assertFalse(window.technology_scan_tree.topLevelItem(0).isHidden())
+        self.assertTrue(window.technology_scan_tree.topLevelItem(1).isHidden())
+        self.assertEqual(
+            window.technology_scan_tree.topLevelItem(0).checkState(0),
+            Qt.CheckState.Checked,
+        )
+        self.assertEqual(
+            window.technology_scan_tree.topLevelItem(1).checkState(0),
+            Qt.CheckState.Unchecked,
+        )
+        window.technology_baseline_filter.clear()
+        application.processEvents()
+        self.assertFalse(window.technology_scan_tree.topLevelItem(1).isHidden())
         window.close()
         window.deleteLater()
         application.processEvents()

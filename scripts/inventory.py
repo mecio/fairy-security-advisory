@@ -686,6 +686,11 @@ def dependency_map(
             values = data.get(section, {})
             if isinstance(values, dict):
                 for name, version in values.items():
+                    # Composer's special `php` platform requirement describes
+                    # the runtime and is recorded below as such. It is not a
+                    # package dependency and must not create a second baseline.
+                    if rel == "composer.json" and str(name).casefold() == "php":
+                        continue
                     deps[str(name)] = str(version)
                     dependency_sources[str(name)] = "declared"
         if rel == "composer.json":
