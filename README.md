@@ -632,7 +632,9 @@ projects. Combinations without a baseline are preselected for a historical
 initialization scan; already covered combinations remain available for a manual
 rescan. **Scan selected technologies** uses the checked rows for historical
 baselines, while **Scan all technologies** uses every listed row. Both retain
-incremental checking over the complete active scope. A hybrid run resolves each selected version's official release date and
+incremental checking over the complete active scope. **Select all technologies**
+toggles every baseline checkbox and displays a partial state for mixed selections.
+A hybrid run resolves each selected version's official release date and
 searches its baseline from that date through today, while retaining the
 per-source incremental window for technologies already initialized. Initialization and incremental runs append to the same daily report,
 with initialization sections labeled explicitly. Successful sources receive

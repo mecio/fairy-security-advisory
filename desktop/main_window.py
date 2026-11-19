@@ -318,6 +318,7 @@ class MainWindow(QMainWindow):
         self.analysis_started_at: float | None = None
         self.analysis_activity_generation = 0
         self.analysis_spinner_index = 0
+        self._updating_baseline_toggle = False
         self.analysis_activity_timer = QTimer(self)
         self.analysis_activity_timer.setInterval(250)
         self.analysis_activity_timer.timeout.connect(self._update_analysis_activity_clock)
@@ -1158,12 +1159,22 @@ class MainWindow(QMainWindow):
         ))
         self.technology_scan_tree.setRootIsDecorated(False)
         self.technology_scan_tree.setAlternatingRowColors(True)
+        self.technology_scan_tree.itemChanged.connect(self._sync_baseline_toggle)
         for column in (0, 2, 3, 4, 5):
             self.technology_scan_tree.header().setSectionResizeMode(
                 column, QHeaderView.ResizeMode.ResizeToContents,
             )
         self.technology_scan_tree.header().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         self.technology_scan_tree.header().setSectionResizeMode(6, QHeaderView.ResizeMode.Stretch)
+        baseline_controls = QHBoxLayout()
+        self.baseline_select_all = QCheckBox("Select all technologies")
+        self.baseline_select_all.setTristate(True)
+        self.baseline_select_all.setToolTip(
+            "Select or clear every historical-baseline checkbox"
+        )
+        self.baseline_select_all.stateChanged.connect(self._set_all_baseline_checks)
+        baseline_controls.addWidget(self.baseline_select_all)
+        baseline_controls.addStretch()
 
         buttons = QHBoxLayout()
         prerequisites = QPushButton("Check prerequisites")
@@ -1246,6 +1257,7 @@ class MainWindow(QMainWindow):
         baseline_layout.setContentsMargins(8, 10, 8, 8)
         baseline_layout.setSpacing(8)
         baseline_layout.addWidget(scope_label)
+        baseline_layout.addLayout(baseline_controls)
         baseline_layout.addWidget(self.technology_scan_tree, 1)
         self.run_tabs.addTab(baseline_page, "Technology baselines")
 
@@ -1732,6 +1744,7 @@ class MainWindow(QMainWindow):
             item.setForeground(4, QColor("#df6f6f"))
             item.setForeground(5, QColor("#df6f6f"))
             self.technology_scan_tree.addTopLevelItem(item)
+            self._sync_baseline_toggle()
             return
         for row in rows:
             deployments = row.get("production_deployments", [])
@@ -1766,6 +1779,47 @@ class MainWindow(QMainWindow):
                 4, "Version evidence quality only; this is not a vulnerability status."
             )
             self.technology_scan_tree.addTopLevelItem(item)
+        self._sync_baseline_toggle()
+
+    def _baseline_checkable_items(self) -> list[QTreeWidgetItem]:
+        return [
+            self.technology_scan_tree.topLevelItem(index)
+            for index in range(self.technology_scan_tree.topLevelItemCount())
+            if self.technology_scan_tree.topLevelItem(index).flags()
+            & Qt.ItemFlag.ItemIsUserCheckable
+        ]
+
+    def _set_all_baseline_checks(self, state: int) -> None:
+        if self._updating_baseline_toggle:
+            return
+        checked = state != Qt.CheckState.Unchecked.value
+        self._updating_baseline_toggle = True
+        try:
+            for item in self._baseline_checkable_items():
+                item.setCheckState(
+                    0, Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked,
+                )
+        finally:
+            self._updating_baseline_toggle = False
+        self._sync_baseline_toggle()
+
+    def _sync_baseline_toggle(self, *_args: object) -> None:
+        if self._updating_baseline_toggle:
+            return
+        items = self._baseline_checkable_items()
+        selected = sum(
+            item.checkState(0) == Qt.CheckState.Checked for item in items
+        )
+        if not items or selected == 0:
+            state = Qt.CheckState.Unchecked
+        elif selected == len(items):
+            state = Qt.CheckState.Checked
+        else:
+            state = Qt.CheckState.PartiallyChecked
+        self.baseline_select_all.blockSignals(True)
+        self.baseline_select_all.setEnabled(bool(items))
+        self.baseline_select_all.setCheckState(state)
+        self.baseline_select_all.blockSignals(False)
 
     def _update_inventory_technology_action(self) -> None:
         self.edit_technologies_button.setEnabled(self.inventory_tree.currentItem() is not None)

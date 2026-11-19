@@ -751,6 +751,28 @@ class DesktopWindowTest(unittest.TestCase):
                 0, Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked,
             )
             window.technology_scan_tree.addTopLevelItem(item)
+        window._sync_baseline_toggle()
+        self.assertEqual(
+            window.baseline_select_all.checkState(), Qt.CheckState.PartiallyChecked,
+        )
+        window.baseline_select_all.setCheckState(Qt.CheckState.Checked)
+        self.assertTrue(all(
+            window.technology_scan_tree.topLevelItem(index).checkState(0)
+            == Qt.CheckState.Checked
+            for index in range(window.technology_scan_tree.topLevelItemCount())
+        ))
+        window.baseline_select_all.setCheckState(Qt.CheckState.Unchecked)
+        self.assertTrue(all(
+            window.technology_scan_tree.topLevelItem(index).checkState(0)
+            == Qt.CheckState.Unchecked
+            for index in range(window.technology_scan_tree.topLevelItemCount())
+        ))
+        window.technology_scan_tree.topLevelItem(1).setCheckState(
+            0, Qt.CheckState.Checked,
+        )
+        self.assertEqual(
+            window.baseline_select_all.checkState(), Qt.CheckState.PartiallyChecked,
+        )
         routing = {
             "summary": "Codex: 1 project(s); Claude: 0 project(s); excluded: 0",
             "groups": {"codex": 1, "claude": 0}, "excluded": 0, "selected": 1,

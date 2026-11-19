@@ -636,7 +636,9 @@ runs historical baselines only for the checked technology rows. **Scan all
 technologies** selects every listed row for historical baseline scanning,
 regardless of its checkbox. Both actions keep the normal incremental check over
 the complete active technology scope; when no row is checked, Scan selected is
-therefore an incremental-only run. Before launch, fAIry validates configuration,
+therefore an incremental-only run. The **Select all technologies** checkbox above
+the table selects or clears every row and shows an intermediate state when only
+some rows are checked. Before launch, fAIry validates configuration,
 warns about stale inventory without changing it, checks prerequisites, and
 tests source reachability. The agent is started from the fAIry project root so it receives
 the project instructions, skill, effective local configuration, inventory,
