@@ -217,6 +217,67 @@ class AdvisorySourceRequestTest(unittest.TestCase):
         self.assertIn("evidence receipt:", detail)
         self.assertEqual((baselines, sources), ({}, []))
 
+    def test_artifact_validation_rejects_modified_immutable_intake(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            intake = root / "candidate-intake.json"
+            intake.write_text(
+                '{"schema_version":1,"sources":[],"candidates":[]}', encoding="utf-8",
+            )
+            from scripts.manage import report_signature
+            frozen_signature = report_signature(intake)
+            intake.write_text(
+                '{"schema_version":1,"sources":[],"candidates":[],"changed":true}',
+                encoding="utf-8",
+            )
+            paths = {
+                "daily report": root / "daily.md", "summary": root / "summary.md",
+                "follow-up": root / "followup.md",
+            }
+            for path in paths.values():
+                path.write_text("staged\n", encoding="utf-8")
+            valid, detail, _baselines, _sources = validate_staged_analysis_artifacts(
+                paths, {name: None for name in paths}, root / "ledger.json", intake,
+                root / "receipt.json", [], [], [], {}, expected_project_ids=[],
+                prior_daily_text=None, expected_intake_signature=frozen_signature,
+            )
+        self.assertFalse(valid)
+        self.assertIn("immutable intake changed", detail)
+
+    def test_receipt_cannot_advance_source_that_intake_marks_partial(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            paths = {
+                "daily report": root / "daily.md", "summary": root / "summary.md",
+                "follow-up": root / "followup.md",
+            }
+            paths["daily report"].write_text("# Updated daily\n", encoding="utf-8")
+            paths["summary"].write_text("# Updated summary\n", encoding="utf-8")
+            paths["follow-up"].write_text("# Follow-up\n", encoding="utf-8")
+            source = {
+                "id": "acn", "status": "partial", "candidate_ids": [],
+                "records_checked": 1, "coverage_basis": "open-ended HTML index",
+            }
+            intake = root / "intake.json"
+            ledger = root / "ledger.json"
+            receipt = root / "receipt.json"
+            intake.write_text(json.dumps({
+                "schema_version": 1, "sources": [source], "candidates": [],
+            }), encoding="utf-8")
+            ledger.write_text(json.dumps({
+                "schema_version": 1, "sources": [source], "candidates": [],
+            }), encoding="utf-8")
+            receipt.write_text(json.dumps({
+                "schema_version": 1, "baselines": [],
+                "sources": [{"id": "acn", "status": "complete"}],
+            }), encoding="utf-8")
+            valid, detail, _baselines, _sources = validate_staged_analysis_artifacts(
+                paths, {name: None for name in paths}, ledger, intake, receipt,
+                [], [], ["acn"], {}, expected_project_ids=[], prior_daily_text=None,
+            )
+        self.assertFalse(valid)
+        self.assertIn("marks incomplete intake sources complete", detail)
+
     @patch.dict("os.environ", {"FAIRY_GUI_PROGRESS": "1"})
     @patch("builtins.print")
     def test_analysis_progress_event_is_machine_readable(self, output) -> None:
@@ -372,6 +433,9 @@ class AdvisorySourceRequestTest(unittest.TestCase):
         self.assertIn("four or more digits", prompt)
         self.assertIn("Do not create generic replacements", prompt)
         self.assertIn("every CVE", prompt)
+        self.assertIn("affected_constraints", prompt)
+        self.assertIn("candidate_ids", prompt)
+        self.assertIn("HTML search pages", prompt)
 
     def test_correction_prompt_is_single_attempt_and_path_scoped(self) -> None:
         prompt = correction_prompt(
@@ -485,10 +549,21 @@ class AdvisorySourceRequestTest(unittest.TestCase):
         self.assertIn("OUTPUT_VALIDATION status=failed attempt=1", event_log)
         self.assertIn("OUTPUT_VALIDATION status=completed attempt=2", event_log)
         phases = [str(event["phase"]) for event in events]
+        self.assertIn("preflight", phases)
         self.assertLess(phases.index("validation"), phases.index("correction"))
         self.assertEqual(phases.count("validation"), 2)
+        self.assertIn("candidate-intake", phases)
+        self.assertIn("staging", phases)
+        self.assertEqual(phases.count("report-staging"), 4)
+        self.assertEqual(phases.count("candidate-ledger"), 4)
+        self.assertEqual(phases.count("coverage-receipt"), 4)
+        for phase in ("report-staging", "candidate-ledger", "coverage-receipt"):
+            statuses = [event["status"] for event in events if event["phase"] == phase]
+            self.assertEqual(statuses[0::2], ["running", "running"])
         self.assertIn("promotion", phases)
+        self.assertIn("archive-followups", phases)
         self.assertIn("state-update", phases)
+        self.assertLess(phases.index("state-update"), phases.index("complete"))
         correction = next(event for event in events if event["phase"] == "correction")
         self.assertEqual((correction["attempt"], correction["max_attempts"]), (1, 1))
 
@@ -501,6 +576,8 @@ class AdvisorySourceRequestTest(unittest.TestCase):
         self.assertEqual(event_log.count("type=correction attempt=1"), 2)
         self.assertNotIn("attempt=3", event_log)
         self.assertNotIn("promotion", [event["phase"] for event in events])
+        failed = [event for event in events if event.get("status") == "failed"]
+        self.assertEqual(failed[-1]["phase"], "validation")
 
     @patch("scripts.manage.prepare_analysis_service", return_value=True)
     @patch("scripts.manage.check_prerequisites", return_value=0)

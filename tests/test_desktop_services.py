@@ -20,6 +20,7 @@ from desktop.services import (
     analysis_run_files, assistant_command, delete_analysis_run,
     eula_accepted, extract_issue_update, project_metadata,
     followup_match_assessment, followup_project_names, followup_source_links,
+    latest_candidate_assessments,
     proposal_changes, security_statistics,
     set_work_animation_mode,
     update_followup_activity,
@@ -388,10 +389,11 @@ class DesktopConfigurationServicesTest(unittest.TestCase):
             ("CVE-2026-56789", "https://www.cve.org/CVERecord?id=CVE-2026-56789"),
         ])
 
-    def test_followup_assessment_uses_strongest_matching_candidate(self) -> None:
+    def test_followup_assessment_uses_project_aware_conservative_score_range(self) -> None:
         activity = {
             "Issue title": "PHP2Shell runtime verification",
             "Advisory / CVE": "AL07/261021/CSIRT-ITA; CVE-2026-109618",
+            "Project": "legacy; portal",
         }
         assessment = followup_match_assessment(activity, [{
             "advisory_id": "AL07/261021/CSIRT-ITA",
@@ -399,14 +401,43 @@ class DesktopConfigurationServicesTest(unittest.TestCase):
             "match_score": 62,
             "confidence": "review",
             "score_breakdown": {"version_relation": 20},
+            "project_id": "legacy",
         }, {
             "advisory_id": "CVE-2026-109618",
             "match_score": 88,
             "confidence": "confirmed",
+            "project_id": "portal",
+        }, {
+            "advisory_id": "CVE-2026-109618",
+            "match_score": 99,
+            "confidence": "confirmed",
+            "project_id": "not-in-finding",
         }])
-        self.assertEqual(assessment["score"], 88)
-        self.assertEqual(assessment["confidence"], "confirmed")
+        self.assertEqual(assessment["score"], 62)
+        self.assertEqual((assessment["score_min"], assessment["score_max"]), (62, 88))
+        self.assertEqual(assessment["confidence"], "review")
         self.assertEqual(assessment["candidate_count"], 2)
+        self.assertEqual(assessment["project_scores"], {"legacy": 62, "portal": 88})
+
+    def test_latest_candidate_assessments_skips_non_terminal_run(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            running = root / "running"
+            completed = root / "completed"
+            running.mkdir()
+            completed.mkdir()
+            (running / "candidate-ledger.json").write_text(
+                '{"candidates":[{"candidate_id":"new-but-running"}]}', encoding="utf-8",
+            )
+            (completed / "candidate-ledger.json").write_text(
+                '{"candidates":[{"candidate_id":"published"}]}', encoding="utf-8",
+            )
+            with patch("desktop.services.analysis_run_entries", return_value=[
+                {"path": running, "status": "running"},
+                {"path": completed, "status": "completed"},
+            ]):
+                candidates = latest_candidate_assessments()
+        self.assertEqual(candidates[0]["candidate_id"], "published")
 
     @patch("desktop.services.subprocess.run")
     def test_claude_authentication_reads_only_logged_in_flag(self, run) -> None:

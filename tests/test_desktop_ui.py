@@ -509,6 +509,10 @@ class DesktopWindowTest(unittest.TestCase):
             "completed": 5, "total": 5, "active_projects": 0,
             "message": "Analysis completed",
         })
+        for _ in range(window.run_journey.MOVE_FRAMES * 3):
+            window.run_journey._advance()
+            if window.run_journey.state == "completed":
+                break
         self.assertEqual(window.analysis_project_progress.value(), 5)
         self.assertIn("completed", window.analysis_activity_label.text().casefold())
         self.assertEqual(window.run_journey.state, "completed")
@@ -596,7 +600,7 @@ class DesktopWindowTest(unittest.TestCase):
         )
         journey.resize(720, 200)
         journey.start("sources")
-        self.assertEqual(journey._active_edges(), {"source-intake"})
+        self.assertEqual(journey._active_edges(), {"candidate-intake"})
         self.assertEqual(journey._face_scale(), -1.0)
         self.assertFalse(journey.grab().isNull())
         journey.finish(False)
@@ -617,12 +621,20 @@ class DesktopWindowTest(unittest.TestCase):
         self.assertEqual(journey._face_scale(), -1.0)
         journey.progress({"phase": "consolidation", "status": "running"})
         self.assertEqual(journey._face_scale(), -1.0)
-        for _ in range(journey.TURN_FRAMES):
+        self.assertEqual(journey.phase, "evidence")
+        self.assertEqual(len(journey.pending_events), 1)
+        for _ in range(journey.MOVE_FRAMES + journey.TURN_FRAMES):
             journey._advance()
         self.assertEqual(journey._face_scale(), 1.0)
         self.assertNotEqual(journey._wand_angle(), 0.0)
         self.assertFalse(journey.grab().isNull())
         journey.finish(True)
+        self.assertEqual(journey.state, "running")
+        for _ in range(journey.MOVE_FRAMES * 3):
+            journey._advance()
+            if journey.state == "completed":
+                break
+        self.assertEqual(journey.state, "completed")
         self.assertEqual(journey._wand_angle(), 0.0)
         journey.close()
         journey.deleteLater()
@@ -636,6 +648,7 @@ class DesktopWindowTest(unittest.TestCase):
         )
         self.assertFalse(journey.idle_sprite.isNull())
         self.assertLessEqual(journey.FAIRY_MAX_SIZE, 74.0)
+        self.assertEqual(len(journey.MAIN_STATIONS), 15)
         self.assertTrue(journey.timer.isActive())
         first_source = journey._phase_pixmap()[1]
         for _ in range(8):
@@ -657,6 +670,16 @@ class DesktopWindowTest(unittest.TestCase):
         self.assertEqual(journey._position_ratio(), journey.PHASE_POSITIONS["validation"])
         self.assertFalse(journey._phase_icon().isNull())
         self.assertEqual((journey.attempt, journey.max_attempts), (1, 2))
+        rectangles = journey._station_rectangles(960, 120, 245)
+        self.assertEqual(len(rectangles), 16)
+        self.assertIn("candidate-ledger", rectangles)
+        self.assertIn("coverage-receipt", rectangles)
+        self.assertIn("correction", rectangles)
+
+        journey.progress({"phase": "validation", "status": "completed"})
+        self.assertIn("validation", journey.visited_phases)
+        journey.progress({"phase": "correction", "status": "rejected"})
+        self.assertNotIn("correction", journey.visited_phases)
 
         journey.set_animation_mode("reduced")
         self.assertTrue(journey.timer.isActive())
@@ -665,6 +688,34 @@ class DesktopWindowTest(unittest.TestCase):
         self.assertFalse(journey.timer.isActive())
         with self.assertRaisesRegex(ValueError, "Unsupported"):
             journey.set_animation_mode("fast-and-dizzy")
+        journey.close()
+        journey.deleteLater()
+        application.processEvents()
+
+    def test_run_journey_queues_fast_real_phase_events_until_each_move_finishes(self) -> None:
+        application = QApplication.instance() or QApplication([])
+        journey = RunJourneyWidget(
+            services.ROOT / "desktop/assets/fairy-security-advisory-icon.png",
+            animation_mode="full",
+        )
+        journey.start("ai-check")
+        journey.progress({"phase": "evidence", "status": "running"})
+        journey.progress({"phase": "candidate-intake", "status": "running"})
+        journey.progress({"phase": "staging", "status": "running"})
+        self.assertEqual(journey.phase, "evidence")
+        self.assertEqual(len(journey.pending_events), 2)
+        for _ in range(journey.MOVE_FRAMES):
+            journey._advance()
+        self.assertEqual(journey.phase, "candidate-intake")
+        self.assertEqual(len(journey.pending_events), 1)
+        for _ in range(journey.MOVE_FRAMES):
+            journey._advance()
+        self.assertEqual(journey.phase, "staging")
+        journey.progress({"phase": "coverage-receipt", "status": "failed"})
+        self.assertEqual(journey.state, "failed")
+        self.assertEqual(
+            journey._position_ratio(), journey.PHASE_POSITIONS["coverage-receipt"],
+        )
         journey.close()
         journey.deleteLater()
         application.processEvents()
@@ -1470,6 +1521,7 @@ class DesktopWindowTest(unittest.TestCase):
                 "match_score": 62,
                 "confidence": "review",
                 "score_breakdown": {"version_relation": 20},
+                "project_id": "api",
             }]
             with patch(
                 "desktop.main_window.services.latest_candidate_assessments",

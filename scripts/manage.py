@@ -91,12 +91,12 @@ except ImportError:
     from scripts.advisory_guardrails import validate_candidate_ledger
 try:
     from candidate_intake import (
-        score_candidate_ledger, validate_candidate_intake,
+        load_candidate_intake, score_candidate_ledger, validate_candidate_intake,
         validate_presentation_settings,
     )
 except ImportError:
     from scripts.candidate_intake import (
-        score_candidate_ledger, validate_candidate_intake,
+        load_candidate_intake, score_candidate_ledger, validate_candidate_intake,
         validate_presentation_settings,
     )
 try:
@@ -928,10 +928,15 @@ def candidate_intake_prompt(
         "(the exact bulletin/vendor/CVE identifier that must survive into ledger and reports), "
         "source_id, source_record_id when available, title, HTTPS url, identifiers list, "
         "technology_keys from plan.technology_scope, optional project_ids, affected_range, "
+        "and affected_constraints as a non-empty list of machine-readable constraints "
+        "using comparators, comma-separated intersections, or || unions. "
         "identity_status (confirmed, supported, unverified, conflicting), source_quality "
         "(primary, official-aggregator, secondary, unknown), and extraction_status "
-        "(complete, partial, failed). Each source entry uses id and status complete, partial, "
-        "or failed. Do not create generic replacements for specific advisories.\n\n"
+        "(complete, partial, failed). Each source entry uses id, status complete/partial/failed, "
+        "candidate_ids listing exactly its candidates, records_checked as a non-negative "
+        "integer, and a non-empty coverage_basis. HTML search pages are open-ended and must "
+        "remain partial rather than claiming exhaustive completion. Do not create generic "
+        "replacements for specific advisories.\n\n"
         f"Authoritative plan: {plan_path}\n"
         f"Active sources:\n{sources}\n"
         f"Provider dossiers:\n{dossier_lines}\n\n"
@@ -1007,7 +1012,7 @@ def consolidation_prompt(
         f"candidate from the immutable intake at {intake_path}. Preserve candidate_id and the exact "
         "advisory_id; never replace a specific bulletin or CVE with a generic label. Write one "
         "candidate/project/technology decision with candidate_id, advisory_id, source_id, project_id, technology_key, declared_value, "
-        "affected_range, range_relation (overlaps, disjoint, unresolved), prerequisite_status "
+        "affected_range, affected_constraints, range_relation, prerequisite_status "
         "(confirmed-present, confirmed-absent, not-required, or unknown), decision_reason, and "
         "decision (immediate-action, follow-up, monitor, not-applicable). A populated declared "
         "range that overlaps or cannot be resolved against an affected range must not be not-applicable "
@@ -1015,8 +1020,11 @@ def consolidation_prompt(
         "Copy the immutable intake sources list exactly, retaining every active source ID and its "
         "complete, partial, or failed status. Mark a source complete only when advisory content "
         "coverage, not mere reachability, succeeded. "
-        "Do not invent match_score values: the launcher calculates them deterministically after "
-        "consolidation. In prose, keep severity separate from correspondence confidence and use "
+        "Do not decide range_relation or invent match_score values: the launcher overwrites the "
+        "declared value from authoritative scope and affected range fields from immutable intake, "
+        "calculates range_relation with its "
+        "deterministic matcher, and then calculates the score. In prose, keep severity separate "
+        "from correspondence confidence and use "
         "neutral 'needs verification' language for unresolved candidates. The configured display "
         f"thresholds are {json.dumps(presentation, ensure_ascii=False)}; they affect presentation "
         "and notifications only, never candidate accounting. "
@@ -1053,7 +1061,8 @@ def correction_prompt(
         "the project or technology scope, change inventory, touch canonical reports, or "
         "archive follow-ups. Read the authoritative plan and previous coordinator output "
         "for context. You may write only the listed staged reports, candidate ledger, and "
-        "evidence receipt. Reconcile them with each other before finishing. There will be "
+        "evidence receipt. The candidate intake is read-only and byte-immutable; changing it "
+        "will fail validation. Reconcile writable artifacts with it before finishing. There will be "
         "no further correction attempt.\n\n"
         f"Authoritative plan: {plan_path}\n"
         + (
@@ -1189,11 +1198,21 @@ def validate_staged_analysis_artifacts(
     active_source_ids: list[str], baseline_windows_by_key: dict[str, dict],
     *, expected_project_ids: list[str], prior_daily_text: str | None,
     finding_presentation: dict | None = None,
+    expected_intake_signature: str | None = None,
+    progress: Callable[[str, str, str], None] | None = None,
 ) -> tuple[bool, str, dict[str, str], list[str]]:
     """Validate staging, ledger, and receipt independently and aggregate errors."""
     errors: list[str] = []
     baseline_results: dict[str, str] = {}
     successful_sources: list[str] = []
+    intake_unchanged = (
+        expected_intake_signature is None
+        or report_signature(candidate_intake_path) == expected_intake_signature
+    )
+    if not intake_unchanged:
+        errors.append("candidate intake: immutable intake changed after discovery")
+    if progress is not None:
+        progress("report-staging", "running", "Daily report · summary · follow-up")
     staging_valid, staging_detail = validate_canonical_report_updates(
         staged_paths, staged_before,
         expected_project_ids=expected_project_ids,
@@ -1202,25 +1221,69 @@ def validate_staged_analysis_artifacts(
     )
     if not staging_valid:
         errors.append(f"staging: {staging_detail}")
-    try:
-        score_candidate_ledger(
-            candidate_ledger_path, candidate_intake_path, finding_presentation,
+    if progress is not None:
+        progress(
+            "report-staging", "completed" if staging_valid else "rejected", staging_detail,
         )
-        validate_candidate_ledger(
-            candidate_ledger_path, technology_scope,
-            staged_paths["daily report"], staged_paths["follow-up"],
-            candidate_intake_path=candidate_intake_path,
-            finding_presentation=finding_presentation,
+    if progress is not None:
+        progress(
+            "candidate-ledger", "running",
+            "Intake accounting · scoring · exact identifiers",
         )
-    except (OSError, ValueError) as error:
-        errors.append(f"candidate ledger: {error}")
+    ledger_valid = intake_unchanged
+    if intake_unchanged:
+        try:
+            score_candidate_ledger(
+                candidate_ledger_path, candidate_intake_path, finding_presentation,
+                technology_scope=technology_scope,
+            )
+            validate_candidate_ledger(
+                candidate_ledger_path, technology_scope,
+                staged_paths["daily report"], staged_paths["follow-up"],
+                candidate_intake_path=candidate_intake_path,
+                finding_presentation=finding_presentation,
+            )
+        except (OSError, ValueError) as error:
+            ledger_valid = False
+            errors.append(f"candidate ledger: {error}")
+    if progress is not None:
+        progress(
+            "candidate-ledger", "completed" if ledger_valid else "rejected",
+            "Candidate ledger valid" if ledger_valid else "Candidate ledger rejected",
+        )
+    if progress is not None:
+        progress(
+            "coverage-receipt", "running", "Baseline windows · active source coverage",
+        )
+    receipt_valid = True
     try:
         baseline_results, successful_sources = validate_evidence_state(
             evidence_state_path, baseline_keys, active_source_ids,
             baseline_windows_by_key,
         )
+        if intake_unchanged:
+            intake_document = load_candidate_intake(candidate_intake_path)
+            incomplete_intake_sources = {
+                str(source.get("id", ""))
+                for source in intake_document.get("sources", [])
+                if isinstance(source, dict) and source.get("status") != "complete"
+            }
+            contradictory = sorted(
+                set(successful_sources) & incomplete_intake_sources
+            )
+            if contradictory:
+                raise ValueError(
+                    "coverage receipt marks incomplete intake sources complete: "
+                    + ", ".join(contradictory)
+                )
     except (OSError, ValueError) as error:
+        receipt_valid = False
         errors.append(f"evidence receipt: {error}")
+    if progress is not None:
+        progress(
+            "coverage-receipt", "completed" if receipt_valid else "rejected",
+            "Coverage receipt valid" if receipt_valid else "Coverage receipt rejected",
+        )
     if errors:
         return False, "; ".join(errors), {}, []
     return (
@@ -1461,6 +1524,12 @@ def run_ai_check(
         release_settings = {}
     selected_scope = [item for item in technology_scope if item["key"] in set(baseline_keys)]
     emit_analysis_progress(
+        phase="preflight", status="completed", provider=provider,
+        completed=0, total=plan["selected_count"],
+        message="Preflight checks completed",
+        detail="Configuration, scope, prerequisites, and advisory state validated",
+    )
+    emit_analysis_progress(
         phase="release-metadata", status="running", provider=provider,
         completed=0, total=plan["selected_count"],
         message="Resolving release metadata",
@@ -1493,6 +1562,12 @@ def run_ai_check(
     for projects in plan["groups"].values():
         for project in projects:
             project["technology_keys"] = sorted(by_project.get(project["id"], []))
+    emit_analysis_progress(
+        phase="release-metadata", status="completed", provider=provider,
+        completed=0, total=plan["selected_count"],
+        message="Release metadata resolved",
+        detail=f"{len(plan['baseline_windows'])} baseline windows prepared",
+    )
     required = required_providers(plan)
     for required_provider in required:
         if required_provider == provider:
@@ -1589,6 +1664,12 @@ def run_ai_check(
         write_private_text(summary_path, "\n".join(lines))
         return exit_code
 
+    emit_analysis_progress(
+        phase="routing", status="completed", provider=provider,
+        completed=0, total=plan["selected_count"],
+        message="Analysis routing frozen",
+        detail=f"{len(required)} provider groups assigned",
+    )
     dossiers: list[Path] = []
     for worker in required:
         if worker == provider:
@@ -1669,7 +1750,7 @@ def run_ai_check(
         phase_results.append(f"{provider} candidate discovery — failed (CLI unavailable)")
         return finish_run("failed", 1)
     emit_analysis_progress(
-        phase="sources", status="running", provider=provider,
+        phase="candidate-intake", status="running", provider=provider,
         completed=completed_projects, total=plan["selected_count"],
         message="Building authoritative candidate intake",
         detail=f"{len(active_sources)} sources · {len(dossiers)} provider dossiers",
@@ -1688,7 +1769,7 @@ def run_ai_check(
     if discovery_result == 0:
         try:
             validate_candidate_intake(
-                candidate_intake_path, technology_scope, active_source_ids, dossiers,
+                candidate_intake_path, technology_scope, active_sources, dossiers,
             )
         except (OSError, ValueError) as error:
             intake_error = str(error)
@@ -1706,7 +1787,7 @@ def run_ai_check(
             f"detail={detail}",
         )
         emit_analysis_progress(
-            phase="sources", status="failed", provider=provider,
+            phase="candidate-intake", status="failed", provider=provider,
             completed=completed_projects, total=plan["selected_count"],
             message="Candidate intake validation failed", detail=detail,
         )
@@ -1718,10 +1799,17 @@ def run_ai_check(
         f"PHASE_FINISH provider={provider} type=candidate-discovery status=completed exit_code=0",
     )
     emit_analysis_progress(
-        phase="sources", status="completed", provider=provider,
+        phase="candidate-intake", status="completed", provider=provider,
         completed=completed_projects, total=plan["selected_count"],
         message="Candidate intake frozen",
         detail=f"{candidate_intake_path.name} · end-to-end accounting enabled",
+    )
+    intake_signature = report_signature(candidate_intake_path)
+    emit_analysis_progress(
+        phase="staging", status="running", provider=provider,
+        completed=completed_projects, total=plan["selected_count"],
+        message="Preparing private report staging",
+        detail="Canonical reports remain untouched until validation succeeds",
     )
     canonical_paths = canonical_report_paths(started_at)
     staged_paths = staged_report_paths(run_directory, canonical_paths)
@@ -1732,6 +1820,12 @@ def run_ai_check(
     prior_daily_text = (
         daily_path.read_text(encoding="utf-8", errors="replace")
         if daily_path.is_file() else None
+    )
+    emit_analysis_progress(
+        phase="staging", status="completed", provider=provider,
+        completed=completed_projects, total=plan["selected_count"],
+        message="Private staging ready",
+        detail=f"{len(staged_paths)} report targets isolated",
     )
     candidate_ledger_path = run_directory / "candidate-ledger.json"
     command = ai_command(
@@ -1781,13 +1875,27 @@ def run_ai_check(
     baseline_results: dict[str, str] = {}
     successful_sources: list[str] = []
     completion_status = "completed"
+    failure_phase = "consolidation"
+
+    def artifact_progress(phase: str, status: str, detail: str, attempt: int) -> None:
+        messages = {
+            "report-staging": "Validating staged reports",
+            "candidate-ledger": "Validating candidate ledger",
+            "coverage-receipt": "Validating coverage receipt",
+        }
+        emit_analysis_progress(
+            phase=phase, status=status, provider=provider,
+            completed=completed_projects, total=plan["selected_count"],
+            message=messages.get(phase, "Validating staged artifacts"),
+            detail=detail, attempt=attempt, max_attempts=2,
+        )
+
     if result == 0:
         emit_analysis_progress(
-            phase="validation", status="running", provider=provider,
+            phase="consolidation", status="completed", provider=provider,
             completed=completed_projects, total=plan["selected_count"],
-            message="Validating staged analysis artifacts",
-            detail="3 staged reports · candidate ledger · coverage receipt",
-            attempt=1, max_attempts=2,
+            message="Consolidation artifacts produced",
+            detail="Entering deterministic staged-artifact validation",
         )
         expected_project_ids = [
             item["id"] for projects in plan["groups"].values() for item in projects
@@ -1800,7 +1908,19 @@ def run_ai_check(
                 expected_project_ids=expected_project_ids,
                 prior_daily_text=prior_daily_text,
                 finding_presentation=finding_presentation,
+                expected_intake_signature=intake_signature,
+                progress=lambda phase, status, detail: artifact_progress(
+                    phase, status, detail, 1,
+                ),
             )
+        )
+        emit_analysis_progress(
+            phase="validation", status="completed" if reports_valid else "rejected",
+            provider=provider, completed=completed_projects,
+            total=plan["selected_count"], message=(
+                "Guard rail validation passed" if reports_valid
+                else "Guard rail validation rejected artifacts"
+            ), detail=report_validation, attempt=1, max_attempts=2,
         )
         append_private_line(
             log_path,
@@ -1809,6 +1929,7 @@ def run_ai_check(
             f"detail={report_validation}",
         )
         if not reports_valid:
+            failure_phase = "validation"
             print(
                 "Coordinator output validation failed; starting the single controlled "
                 f"correction attempt: {report_validation}",
@@ -1843,6 +1964,16 @@ def run_ai_check(
                     capture_path=correction_output, event_log_path=log_path,
                 )
             correction_status = "completed" if correction_result == 0 else "failed"
+            emit_analysis_progress(
+                phase="correction", status=correction_status, provider=provider,
+                completed=completed_projects, total=plan["selected_count"],
+                message=(
+                    "Controlled correction produced updated staging"
+                    if correction_result == 0 else "Controlled correction failed"
+                ),
+                detail="Single correction attempt completed",
+                attempt=1, max_attempts=1,
+            )
             phase_results.append(
                 f"{provider} correction — {correction_status} (exit {correction_result})"
             )
@@ -1853,13 +1984,6 @@ def run_ai_check(
                 f"status={correction_status} exit_code={correction_result}",
             )
             if correction_result == 0:
-                emit_analysis_progress(
-                    phase="validation", status="running", provider=provider,
-                    completed=completed_projects, total=plan["selected_count"],
-                    message="Revalidating corrected artifacts",
-                    detail="Final validation before publication",
-                    attempt=2, max_attempts=2,
-                )
                 reports_valid, report_validation, baseline_results, successful_sources = (
                     validate_staged_analysis_artifacts(
                         staged_paths, staged_before, candidate_ledger_path,
@@ -1869,7 +1993,19 @@ def run_ai_check(
                         expected_project_ids=expected_project_ids,
                         prior_daily_text=prior_daily_text,
                         finding_presentation=finding_presentation,
+                        expected_intake_signature=intake_signature,
+                        progress=lambda phase, status, detail: artifact_progress(
+                            phase, status, detail, 2,
+                        ),
                     )
+                )
+                emit_analysis_progress(
+                    phase="validation", status="completed" if reports_valid else "rejected",
+                    provider=provider, completed=completed_projects,
+                    total=plan["selected_count"], message=(
+                        "Corrected artifacts passed guard rails" if reports_valid
+                        else "Corrected artifacts failed guard rails"
+                    ), detail=report_validation, attempt=2, max_attempts=2,
                 )
                 append_private_line(
                     log_path,
@@ -1880,6 +2016,7 @@ def run_ai_check(
                 )
                 result = 0 if reports_valid else 2
             else:
+                failure_phase = "correction"
                 reports_valid = False
                 report_validation = (
                     f"controlled correction command failed with exit {correction_result}"
@@ -1897,19 +2034,40 @@ def run_ai_check(
                 baseline_results, baseline_keys, len(successful_sources), len(active_sources),
             )
             if coverage_status == "failed":
+                failure_phase = "coverage-receipt"
                 result = 4
                 report_validation += "; every selected baseline failed"
             else:
                 completion_status = coverage_status
                 try:
+                    failure_phase = "promotion"
                     emit_analysis_progress(
                         phase="promotion", status="running", provider=provider,
                         completed=plan["selected_count"], total=plan["selected_count"],
                         message="Publishing validated reports",
-                        detail="Atomic promotion · closed follow-up archival",
+                        detail="Atomic promotion from private staging",
                     )
                     promote_staged_reports(staged_paths, canonical_paths)
+                    emit_analysis_progress(
+                        phase="promotion", status="completed", provider=provider,
+                        completed=plan["selected_count"], total=plan["selected_count"],
+                        message="Validated reports published",
+                        detail="Atomic promotion completed",
+                    )
+                    failure_phase = "archive-followups"
+                    emit_analysis_progress(
+                        phase="archive-followups", status="running", provider=provider,
+                        completed=plan["selected_count"], total=plan["selected_count"],
+                        message="Archiving closed follow-up activities",
+                        detail="Write-first monthly archive update",
+                    )
                     archive_closed_followups(ROOT)
+                    emit_analysis_progress(
+                        phase="archive-followups", status="completed", provider=provider,
+                        completed=plan["selected_count"], total=plan["selected_count"],
+                        message="Follow-up archive updated",
+                        detail="Closed activities archived",
+                    )
                 except OSError as error:
                     result = 3
                     report_validation += f"; unable to promote staged reports: {error}"
@@ -1927,18 +2085,13 @@ def run_ai_check(
         f"PHASE_FINISH provider={provider} type=consolidation status={phase_status} "
         f"exit_code={result}",
     )
-    emit_analysis_progress(
-        phase="complete" if result == 0 else "consolidation",
-        status=completion_status if result == 0 else "failed", provider=provider,
-        completed=plan["selected_count"] if result == 0 else completed_projects,
-        total=plan["selected_count"],
-        active_projects=0 if result == 0 else len(plan["groups"][provider]),
-        message=(
-            "Analysis completed with limitations"
-            if result == 0 and completion_status == "completed-with-limitations"
-            else "Analysis completed" if result == 0 else "Consolidation failed"
-        ),
-    )
+    if result != 0:
+        emit_analysis_progress(
+            phase=failure_phase, status="failed", provider=provider,
+            completed=completed_projects, total=plan["selected_count"],
+            active_projects=len(plan["groups"][provider]),
+            message=f"{failure_phase.replace('-', ' ').title()} failed",
+        )
     if result == 0:
         finished = dt.datetime.now(dt.timezone.utc)
         emit_analysis_progress(
@@ -1963,7 +2116,7 @@ def run_ai_check(
                 f"STATE_UPDATE status=failed detail={error}",
             )
             emit_analysis_progress(
-                phase="complete", status="failed", provider=provider,
+                phase="state-update", status="failed", provider=provider,
                 completed=plan["selected_count"], total=plan["selected_count"],
                 message="Reports updated but advisory state could not be saved",
             )
@@ -1971,6 +2124,22 @@ def run_ai_check(
         print(
             f"Advisory state updated: {len(baseline_keys)} baseline(s), "
             f"{len(successful_sources)} source checkpoint(s)."
+        )
+        emit_analysis_progress(
+            phase="state-update", status="completed", provider=provider,
+            completed=plan["selected_count"], total=plan["selected_count"],
+            message="Advisory checkpoints updated",
+            detail="Baseline and source checkpoints saved",
+        )
+        emit_analysis_progress(
+            phase="complete", status=completion_status, provider=provider,
+            completed=plan["selected_count"], total=plan["selected_count"],
+            active_projects=0, message=(
+                "Analysis completed with limitations"
+                if completion_status == "completed-with-limitations"
+                else "Analysis completed"
+            ),
+            detail="Reports published · follow-up archived · checkpoints saved",
         )
     return finish_run(completion_status if result == 0 else "failed", result)
 

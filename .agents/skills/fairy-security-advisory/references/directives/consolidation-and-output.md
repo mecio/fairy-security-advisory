@@ -17,6 +17,9 @@ canonical reports and evidence state.
   every intake candidate across every in-scope project/technology pair and its
   source-status list must exactly match the intake. Never delete, rename, or
   replace an intake identity during consolidation.
+- The launcher records the intake digest after discovery and checks it on every
+  validation attempt. A controlled correction may read the intake but must not
+  change a byte; any change rejects staging.
 - In a routed run, write reports only to the staging paths supplied by the
   launcher. The launcher validates the staged daily report, follow-up, ledger,
   and receipt before atomically promoting the reports to their canonical paths.

@@ -12,8 +12,10 @@ including historical baselines and partial source runs.
    `candidate_id`, source ID, and the exact advisory identifier. Record the
    project, technology key, declared value, affected range, prerequisite
    status, and decision.
-2. Match exact versions deterministically against the affected and fixed
-   ranges. A known fixed version may be excluded only with that range evidence.
+2. Preserve the intake affected-range fields. The launcher, not the AI,
+   computes `range_relation` deterministically from the authoritative declared
+   value and `affected_constraints`; it overwrites any proposed relation before
+   scoring. A known fixed version may be excluded only with that range evidence.
 3. Treat a declared range, minimum, caret, tilde, wildcard, or other
    non-exact populated value as a range. If it overlaps an advisory's affected
    range, retain the candidate. Do not discard it because the actual installed
@@ -45,6 +47,9 @@ including historical baselines and partial source runs.
 - Every exact bulletin, source-record, CVE, and GHSA identifier carried by the
   intake must survive into the staged daily report and, for actionable items,
   the staged follow-up. A generic replacement does not satisfy this rule.
+- For an actionable ledger row, the exact identifiers and its project must
+  occur in the same follow-up table row. Global mentions elsewhere in the file
+  do not establish a finding-to-project association.
 - When the same advisory applies to multiple projects with equivalent work,
   consolidate it into one follow-up row and list every project in its `Project`
   cell. Keep rows separate only when evidence, owner, status, action, or

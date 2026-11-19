@@ -504,7 +504,9 @@ def analysis_run_candidate_summary(directory: Path) -> dict[str, Any]:
 def latest_candidate_assessments() -> list[dict[str, Any]]:
     """Load scored candidates from the newest completed run that has a ledger."""
     for entry in analysis_run_entries():
-        if str(entry.get("status", "")).casefold() == "failed":
+        if str(entry.get("status", "")).casefold() not in {
+            "completed", "completed-with-limitations",
+        }:
             continue
         ledger = Path(entry["path"]) / "candidate-ledger.json"
         if not ledger.is_file() or ledger.is_symlink():
@@ -522,11 +524,14 @@ def latest_candidate_assessments() -> list[dict[str, Any]]:
 def followup_match_assessment(
     activity: dict[str, str], candidates: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any] | None:
-    """Match a follow-up row to the strongest scored ledger candidate."""
+    """Match a follow-up row to scored candidates for the projects in that row."""
     haystack = "\n".join((
         activity.get("Issue title", ""), activity.get("Advisory / CVE", ""),
         activity.get("Description", ""),
     )).casefold()
+    activity_projects = {
+        project.casefold() for project in followup_project_names(activity)
+    }
     matches: list[dict[str, Any]] = []
     for candidate in candidates if candidates is not None else latest_candidate_assessments():
         if (
@@ -538,16 +543,27 @@ def followup_match_assessment(
             str(candidate.get("advisory_id", "")),
             *[str(value) for value in candidate.get("identifiers", [])],
         ]
-        if any(marker and marker.casefold() in haystack for marker in markers):
+        candidate_project = str(candidate.get("project_id", "")).strip().casefold()
+        if (
+            candidate_project and candidate_project in activity_projects
+            and any(marker and marker.casefold() in haystack for marker in markers)
+        ):
             matches.append(candidate)
     if not matches:
         return None
-    selected = max(matches, key=lambda item: int(item.get("match_score", 0)))
+    ordered = sorted(matches, key=lambda item: int(item.get("match_score", 0)))
+    weakest, strongest = ordered[0], ordered[-1]
     return {
-        "score": int(selected.get("match_score", 0)),
-        "confidence": str(selected.get("confidence", "weak")),
+        "score": int(weakest.get("match_score", 0)),
+        "score_min": int(weakest.get("match_score", 0)),
+        "score_max": int(strongest.get("match_score", 0)),
+        "confidence": str(weakest.get("confidence", "weak")),
         "candidate_count": len(matches),
-        "breakdown": selected.get("score_breakdown", {}),
+        "breakdown": weakest.get("score_breakdown", {}),
+        "project_scores": {
+            str(item.get("project_id", "")): int(item.get("match_score", 0))
+            for item in ordered
+        },
     }
 
 

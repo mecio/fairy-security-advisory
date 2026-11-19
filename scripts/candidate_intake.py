@@ -7,6 +7,11 @@ import re
 from pathlib import Path
 from typing import Any, Iterable
 
+try:
+    from version_ranges import ranges_relation
+except ImportError:
+    from scripts.version_ranges import ranges_relation
+
 
 CVE_PATTERN = re.compile(r"(?i)\bCVE-\d{4}-\d{4,}\b")
 GHSA_PATTERN = re.compile(r"(?i)\bGHSA-[a-z0-9]{4}(?:-[a-z0-9]{4}){2}\b")
@@ -15,7 +20,7 @@ IDENTITY_STATUSES = {"confirmed", "supported", "unverified", "conflicting"}
 SOURCE_QUALITIES = {"primary", "official-aggregator", "secondary", "unknown"}
 EXTRACTION_STATUSES = {"complete", "partial", "failed"}
 SOURCE_STATUSES = {"complete", "partial", "failed"}
-SCORE_MODEL_VERSION = 1
+SCORE_MODEL_VERSION = 2
 PREREQUISITE_PRESENT = {"confirmed", "confirmed-present", "present", "not-required"}
 PREREQUISITE_ABSENT = {"confirmed-absent", "absent"}
 PREREQUISITE_STATUSES = PREREQUISITE_PRESENT | PREREQUISITE_ABSENT | {
@@ -86,22 +91,47 @@ def _dossier_identifiers(paths: Iterable[Path]) -> set[str]:
 def validate_candidate_intake(
     path: Path,
     technology_scope: list[dict[str, Any]],
-    active_source_ids: Iterable[str],
+    active_sources: Iterable[str | dict[str, Any]],
     dossier_paths: Iterable[Path] = (),
 ) -> dict[str, Any]:
     """Validate discovery output before the coordinator can consume it."""
     document = load_candidate_intake(path)
     scope_keys = {str(item.get("key")) for item in technology_scope}
-    expected_sources = set(active_source_ids)
+    source_kinds: dict[str, str] = {}
+    for source in active_sources:
+        if isinstance(source, dict):
+            source_id = str(source.get("id", "")).strip()
+            source_kinds[source_id] = str(source.get("type", "")).strip().casefold()
+        else:
+            source_id = str(source).strip()
+            source_kinds[source_id] = ""
+    expected_sources = set(source_kinds)
     source_results: dict[str, str] = {}
+    source_candidate_ids: dict[str, set[str]] = {}
     for item in document["sources"]:
         if not isinstance(item, dict):
             raise ValueError("candidate intake source entries must be mappings")
         source_id = str(item.get("id", "")).strip()
         status = str(item.get("status", "")).strip()
-        if source_id in source_results or source_id not in expected_sources or status not in SOURCE_STATUSES:
+        candidate_ids = item.get("candidate_ids")
+        records_checked = item.get("records_checked")
+        coverage_basis = str(item.get("coverage_basis", "")).strip()
+        if (
+            source_id in source_results or source_id not in expected_sources
+            or status not in SOURCE_STATUSES
+            or not isinstance(candidate_ids, list)
+            or any(not isinstance(value, str) or not value.strip() for value in candidate_ids)
+            or len(set(candidate_ids)) != len(candidate_ids)
+            or not isinstance(records_checked, int) or isinstance(records_checked, bool)
+            or records_checked < 0 or not coverage_basis
+        ):
             raise ValueError("candidate intake has an invalid or duplicate source result")
+        if status == "complete" and records_checked == 0:
+            raise ValueError("a complete source needs a non-zero deterministic record count")
+        if status == "complete" and source_kinds.get(source_id) == "html":
+            raise ValueError("an HTML discovery source cannot claim exhaustive completion")
         source_results[source_id] = status
+        source_candidate_ids[source_id] = {str(value) for value in candidate_ids}
     missing_sources = expected_sources - set(source_results)
     extra_sources = set(source_results) - expected_sources
     if missing_sources or extra_sources:
@@ -112,6 +142,9 @@ def validate_candidate_intake(
 
     seen: set[str] = set()
     accounted_identifiers: set[str] = set()
+    actual_source_candidates: dict[str, set[str]] = {
+        source_id: set() for source_id in expected_sources
+    }
     for candidate in document["candidates"]:
         if not isinstance(candidate, dict):
             raise ValueError("candidate intake entries must be mappings")
@@ -121,6 +154,7 @@ def validate_candidate_intake(
         title = str(candidate.get("title", "")).strip()
         url = str(candidate.get("url", "")).strip()
         affected_range = str(candidate.get("affected_range", "")).strip()
+        affected_constraints = candidate.get("affected_constraints")
         identity_status = str(candidate.get("identity_status", "")).strip()
         source_quality = str(candidate.get("source_quality", "")).strip()
         extraction_status = str(candidate.get("extraction_status", "")).strip()
@@ -131,6 +165,11 @@ def validate_candidate_intake(
             not candidate_id or candidate_id in seen or not advisory_id
             or source_id not in expected_sources
             or not title or not url.startswith("https://") or not affected_range
+            or not isinstance(affected_constraints, list) or not affected_constraints
+            or any(
+                not isinstance(value, str) or not value.strip()
+                for value in affected_constraints
+            )
             or identity_status not in IDENTITY_STATUSES
             or source_quality not in SOURCE_QUALITIES
             or extraction_status not in EXTRACTION_STATUSES
@@ -147,10 +186,14 @@ def validate_candidate_intake(
             if identifier.startswith("CVE-") and CVE_PATTERN.fullmatch(identifier) is None:
                 raise ValueError(f"candidate intake has an invalid CVE identifier: {identifier}")
         seen.add(candidate_id)
+        actual_source_candidates[source_id].add(candidate_id)
         accounted_identifiers.update(clean_identifiers)
         accounted_identifiers.update(advisory_identifiers(advisory_id))
         accounted_identifiers.update(advisory_identifiers(candidate_id))
         accounted_identifiers.update(advisory_identifiers(str(candidate.get("source_record_id", ""))))
+
+    if source_candidate_ids != actual_source_candidates:
+        raise ValueError("candidate intake source candidate accounting is incomplete or inconsistent")
 
     missing_dossier = _dossier_identifiers(dossier_paths) - accounted_identifiers
     if missing_dossier:
@@ -202,12 +245,17 @@ def score_candidate(
 
 def score_candidate_ledger(
     ledger_path: Path, intake_path: Path, settings: dict[str, Any] | None = None,
+    *, technology_scope: list[dict[str, Any]] | None = None,
 ) -> None:
     """Enrich the AI ledger with deterministic, versioned scoring metadata."""
     configured = validate_presentation_settings(settings)
     intake = load_candidate_intake(intake_path)
     intake_by_id = {
         str(candidate.get("candidate_id")): candidate for candidate in intake["candidates"]
+    }
+    versions_by_key = {
+        str(item.get("key", "")): str(item.get("version", "")).strip()
+        for item in technology_scope or []
     }
     try:
         ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
@@ -222,6 +270,18 @@ def score_candidate_ledger(
         intake_candidate = intake_by_id.get(str(candidate.get("candidate_id", "")))
         if intake_candidate is None:
             continue
+        candidate["advisory_id"] = str(intake_candidate.get("advisory_id", ""))
+        candidate["source_id"] = str(intake_candidate.get("source_id", ""))
+        candidate["affected_range"] = str(intake_candidate.get("affected_range", ""))
+        candidate["affected_constraints"] = list(
+            intake_candidate.get("affected_constraints", [])
+        )
+        technology_key = str(candidate.get("technology_key", ""))
+        if technology_key in versions_by_key:
+            candidate["declared_value"] = versions_by_key[technology_key]
+        candidate["range_relation"] = ranges_relation(
+            str(candidate.get("declared_value", "")), candidate["affected_constraints"],
+        )
         score, band, breakdown = score_candidate(candidate, intake_candidate, configured)
         candidate["match_score"] = score
         candidate["confidence"] = band
@@ -234,6 +294,9 @@ def score_candidate_ledger(
         candidate["identifiers"] = list(intake_candidate.get("identifiers", []))
         candidate["title"] = str(intake_candidate.get("title", ""))
         candidate["source_url"] = str(intake_candidate.get("url", ""))
+        candidate["source_record_id"] = str(
+            intake_candidate.get("source_record_id", "")
+        )
     ledger_path.write_text(
         json.dumps(ledger, ensure_ascii=False, indent=2) + "\n", encoding="utf-8",
     )

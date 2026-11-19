@@ -615,11 +615,16 @@ run without promoting the staged reports.
 
 Before consolidation, a separate discovery phase writes and validates an
 immutable `candidate-intake.json`. Every active source is accounted for and
-every dossier identifier must survive into this intake. Consolidation must then
+every dossier identifier must survive into this intake. Source entries reconcile
+their exact candidate IDs, checked-record count, and coverage basis; open-ended
+HTML indexes cannot claim exhaustive completion. Each candidate also carries
+machine-readable affected constraints. Consolidation must then
 produce one ledger decision for every intake candidate/project/technology
-combination. The launcher adds the configured deterministic score and rejects
+combination. The launcher verifies the intake digest, overwrites factual range
+fields from intake, computes range overlap itself, adds the configured score, and rejects
 missing candidates, generic identity replacements, inconsistent scores, or
-staged reports that omit exact bulletin/CVE identifiers. The PHP2Shell
+staged reports whose finding row omits exact bulletin/CVE identifiers or an
+affected project. The PHP2Shell
 regression fixture exercises `AL07/261021/CSIRT-ITA`, long CVE serials, and a
 declared PHP `>=7.2` range without requiring live ACN access during tests.
 
@@ -630,9 +635,15 @@ validation attempt, and detail line come from real launcher milestones:
 release-metadata resolution, routing, provider evidence, consolidation,
 staging/ledger/receipt validation, controlled correction, report promotion,
 and checkpoint updates. It never invents per-file or model-internal progress.
-The fairy uses a distinct illustration for research, project evidence,
-consolidation, validation, correction, and routing; while idle she gently
-dozes in a four-frame loop.
+The visible journey exposes the real milestones individually: preparation,
+release metadata, routing, project dossiers, candidate intake, private staging,
+correlation, staged reports, candidate ledger, coverage receipt, guard-rail
+gate, publication, follow-up archival, checkpoints, and completion. Controlled
+correction is displayed as an optional branch that returns to staged-report
+validation; a normal successful run does not mark it as visited. The fairy uses
+a distinct illustration for research, project evidence, consolidation,
+validation, correction, and routing; while idle she gently dozes in a
+four-frame loop.
 
 Choose **fAIry animation** on the Configuration page:
 
@@ -640,9 +651,12 @@ Choose **fAIry animation** on the Configuration page:
 - **Reduced** keeps the phase pose and a slow subtle motion without particles.
 - **Disabled** keeps all truthful status details and a static illustration.
 
-Highlighted paths follow the current operation. In Full mode, source checks
-light the advisory path, inventory work lights the project path, and matching
-or correction sends a sparkle trail toward **Match & verify**. The panel is not
+Highlighted paths follow the current operation. In Full mode, each completed
+station and connection remains softly illuminated, the active connection pumps
+colored particles, and correlation or correction adds a sparkle trail toward
+its real destination. Fast launcher events are queued so fAIry reaches each
+real station in order instead of jumping directly to the last emitted phase;
+rejected phases are not painted as completed. The panel is not
 a live network map or a percentage of files scanned. Project counts advance at
 provider group boundaries. Switch to the separate **Detailed log** tab to give process output
 the full page area while analysis continues. It is the place to read errors

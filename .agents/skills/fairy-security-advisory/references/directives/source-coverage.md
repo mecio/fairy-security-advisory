@@ -16,6 +16,15 @@ other configured source evidence.
   source record ID, URL, and every CVE/GHSA identifier. A coordinator may add
   applicability evidence but may not replace a specific candidate with a
   generic technology advisory.
+- Give every source entry an exact `candidate_ids` list, a non-negative
+  `records_checked` count, and a concrete `coverage_basis`. These fields must
+  reconcile with the candidates attributed to that source. An open-ended HTML
+  search/index cannot claim exhaustive `complete` coverage; use `partial` even
+  when the page was reachable and individual bulletins were retrieved.
+- Record affected versions twice: human-readable `affected_range` and a
+  non-empty `affected_constraints` list using numeric comparators,
+  comma-separated intersections, or `||` unions. Do not encode prose in the
+  machine-readable list; unresolved source semantics stay explicit.
 - CVE syntax has four or more digits after the year. A long serial such as
   `CVE-2026-109618` is valid syntax; verify it against sources instead of
   rejecting it because of its length.

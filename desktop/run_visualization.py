@@ -18,59 +18,85 @@ class RunJourneyWidget(QWidget):
 
     TURN_FRAMES = 12
     MOVE_FRAMES = 18
-    FAIRY_MAX_SIZE = 74.0
+    FAIRY_MAX_SIZE = 62.0
     ANIMATION_MODES = frozenset({"full", "reduced", "disabled"})
     INPUT_PHASES = frozenset({
-        "sources", "projects", "routing", "release-metadata", "evidence", "preflight",
+        "candidate-intake", "sources", "projects", "routing", "release-metadata",
+        "evidence", "preflight",
     })
     PHASE_ASSETS = {
         "routing": "fairy-routing.png",
         "release-metadata": "fairy-sources.png",
         "sources": "fairy-sources.png",
+        "candidate-intake": "fairy-sources.png",
         "evidence": "fairy-evidence.png",
+        "staging": "fairy-consolidation.png",
         "consolidation": "fairy-consolidation.png",
+        "report-staging": "fairy-validation.png",
+        "candidate-ledger": "fairy-validation.png",
+        "coverage-receipt": "fairy-validation.png",
         "validation": "fairy-validation.png",
         "correction": "fairy-correction.png",
         "promotion": "fairy-correction.png",
+        "archive-followups": "fairy-correction.png",
         "state-update": "fairy-validation.png",
     }
     PHASE_LABELS = {
         "idle": "Ready", "preflight": "Preflight", "projects": "Inventory",
         "sources": "Sources", "routing": "Routing", "release-metadata": "Release data",
-        "evidence": "Evidence", "consolidation": "Consolidation",
-        "validation": "Validation", "correction": "Correction",
-        "promotion": "Publishing", "state-update": "Checkpoints", "complete": "Complete",
+        "evidence": "Project evidence", "candidate-intake": "Candidate intake",
+        "staging": "Private staging", "consolidation": "Consolidation",
+        "report-staging": "Staged reports", "candidate-ledger": "Candidate ledger",
+        "coverage-receipt": "Coverage receipt", "validation": "Guard rail gate",
+        "correction": "Correction", "promotion": "Publishing",
+        "archive-followups": "Follow-up archive", "state-update": "Checkpoints",
+        "complete": "Complete",
     }
-    COLORS = {
-        "source-intake": QColor("#4bd8eb"),
-        "project-intake": QColor("#a98bff"),
-        "source-match": QColor("#48c8dc"),
-        "project-match": QColor("#9c86ee"),
+    MAIN_STATIONS = (
+        ("preflight", "Prepare", "project"),
+        ("release-metadata", "Release data", "source"),
+        ("routing", "Route projects", "project"),
+        ("evidence", "Project dossiers", "project"),
+        ("candidate-intake", "Candidate intake", "source"),
+        ("staging", "Private staging", "matching"),
+        ("consolidation", "Correlate", "matching"),
+        ("report-staging", "Staged reports", "validation"),
+        ("candidate-ledger", "Candidate ledger", "validation"),
+        ("coverage-receipt", "Coverage receipt", "validation"),
+        ("validation", "Guard rail gate", "validation"),
+        ("promotion", "Publish reports", "reports"),
+        ("archive-followups", "Archive follow-up", "reports"),
+        ("state-update", "Checkpoints", "reports"),
+        ("complete", "Complete", "reports"),
+    )
+    STATION_COLORS = {
+        "source": QColor("#4bd8eb"),
+        "project": QColor("#a98bff"),
+        "matching": QColor("#58cde0"),
         "validation": QColor("#71b9ff"),
+        "correction": QColor("#e5bb62"),
         "reports": QColor("#7ad99a"),
     }
     PHASE_POSITIONS = {
-        "idle": (.39, .50),
-        "preflight": (.11, .50),
-        "sources": (.16, .04),
-        "release-metadata": (.40, .04),
-        "projects": (.16, .96),
-        "routing": (.17, .96),
-        "evidence": (.40, .96),
-        "consolidation": (.43, .50),
-        "validation": (.625, .50),
-        "correction": (.625, .50),
-        "promotion": (.82, .50),
-        "state-update": (.88, .50),
-        "complete": (.91, .50),
+        "idle": (.06, 0), "preflight": (.06, 0),
+        "release-metadata": (.185, 0), "routing": (.31, 0),
+        "evidence": (.435, 0), "candidate-intake": (.56, 0),
+        "staging": (.685, 0), "consolidation": (.81, 0),
+        "report-staging": (.935, 0), "candidate-ledger": (.935, 1),
+        "coverage-receipt": (.79, 1), "validation": (.645, 1),
+        "correction": (.645, .50), "promotion": (.50, 1),
+        "archive-followups": (.355, 1), "state-update": (.21, 1),
+        "complete": (.065, 1),
+        "sources": (.56, 0), "projects": (.435, 0),
     }
+    PHASE_ALIASES = {"sources": "candidate-intake", "projects": "evidence"}
 
     def __init__(
         self, icon_path: Path, parent: QWidget | None = None,
         *, animation_mode: str = "full",
     ) -> None:
         super().__init__(parent)
-        self.setMinimumHeight(260)
+        self.setMinimumHeight(320)
         self.setAccessibleName("Security check activity animation")
         self.setToolTip(
             "The connected stations follow real process milestones. In full mode fAIry "
@@ -101,6 +127,11 @@ class RunJourneyWidget(QWidget):
         self.position_from = self.PHASE_POSITIONS["idle"]
         self.position_to = self.PHASE_POSITIONS["idle"]
         self.move_started = 0
+        self.travel_from_phase = "preflight"
+        self.visited_phases: set[str] = set()
+        self.phase_states: dict[str, str] = {}
+        self.pending_events: list[dict[str, object]] = []
+        self.finish_requested = False
         self.timer = QTimer(self)
         self.timer.setInterval(70 if self.animation_mode == "full" else 240)
         self.timer.timeout.connect(self._advance)
@@ -111,6 +142,11 @@ class RunJourneyWidget(QWidget):
         if mode not in self.ANIMATION_MODES:
             raise ValueError(f"Unsupported animation mode: {mode}")
         self.animation_mode = mode
+        if mode != "full":
+            while self.pending_events:
+                self._apply_progress_event(self.pending_events.pop(0))
+            if self.finish_requested and self.phase == "complete":
+                self._complete_finish()
         self._sync_timer()
         self._update_accessibility()
         self.update()
@@ -125,7 +161,7 @@ class RunJourneyWidget(QWidget):
     def start(self, action: str) -> None:
         self.state = "running"
         next_phase = {
-            "ai-check": "routing", "sources": "sources", "refresh": "projects",
+            "ai-check": "preflight", "sources": "candidate-intake", "refresh": "evidence",
             "prerequisites": "preflight", "validate": "preflight",
             "prepublish": "preflight",
         }.get(action, "preflight")
@@ -148,6 +184,11 @@ class RunJourneyWidget(QWidget):
         self.position_from = self.PHASE_POSITIONS["idle"]
         self.position_to = self.PHASE_POSITIONS[next_phase]
         self.move_started = 0
+        self.travel_from_phase = "preflight"
+        self.visited_phases = set()
+        self.phase_states = {next_phase: "running"}
+        self.pending_events = []
+        self.finish_requested = False
         self.turn_to = -1.0 if self.phase in self.INPUT_PHASES else 1.0
         self.turn_from = self.turn_to
         self.turn_started = 0
@@ -157,14 +198,38 @@ class RunJourneyWidget(QWidget):
 
     def progress(self, event: dict[str, object]) -> None:
         phase = str(event.get("phase") or "").casefold()
+        phase = self.PHASE_ALIASES.get(phase, phase)
+        status = str(event.get("status") or "running").casefold()
+        next_phase = phase if phase in self.PHASE_LABELS else self.phase
+        if status != "failed" and (
+            self.animation_mode == "full" and self.state == "running"
+            and next_phase != self.phase and (self._is_moving() or self.pending_events)
+        ):
+            self.pending_events.append(dict(event))
+            self._sync_timer()
+            return
+        self._apply_progress_event(event)
+
+    def _apply_progress_event(self, event: dict[str, object]) -> None:
+        phase = str(event.get("phase") or "").casefold()
+        phase = self.PHASE_ALIASES.get(phase, phase)
         status = str(event.get("status") or "running").casefold()
         facing_before = self._face_scale()
         next_phase = phase if phase in self.PHASE_LABELS else self.phase
         if next_phase != self.phase:
+            self.travel_from_phase = self.phase
             self.position_from = self._position_ratio()
             self.position_to = self.PHASE_POSITIONS[next_phase]
             self.move_started = self.frame
         self.phase = next_phase
+        if status in {"completed", "completed-with-limitations"}:
+            self.phase_states[next_phase] = "completed"
+            self.visited_phases.add(next_phase)
+        elif status in {"failed", "rejected"}:
+            self.phase_states[next_phase] = status
+            self.visited_phases.discard(next_phase)
+        else:
+            self.phase_states[next_phase] = "running"
         facing_after = -1.0 if self.phase in self.INPUT_PHASES else 1.0
         if facing_after != self.turn_to:
             self.turn_from = facing_before
@@ -184,21 +249,52 @@ class RunJourneyWidget(QWidget):
             self.attempt = 0
             self.max_attempts = 0
         if status == "failed":
+            self.position_from = self.position_to = self.PHASE_POSITIONS[self.phase]
             self.finish(False)
         elif status in {"completed", "completed-with-limitations"} and phase == "complete":
-            self.finish(True)
+            self.finish_requested = True
+            if self.animation_mode != "full" or not self._is_moving():
+                self._complete_finish()
         else:
             self._sync_timer()
             self._update_accessibility()
             self.update()
 
     def finish(self, success: bool) -> None:
-        self.state = "completed" if success else "failed"
-        self.phase = "complete" if success else self.phase
-        self.message = "Check complete" if success else "Check failed — review the log"
-        if success:
-            self.turn_from = self.turn_to = 1.0
-            self.position_from = self.position_to = self.PHASE_POSITIONS["complete"]
+        if not success:
+            self.pending_events.clear()
+            self.finish_requested = False
+            self.state = "failed"
+            self.message = "Check failed — review the log"
+            self.timer.stop()
+            self._update_accessibility()
+            self.update()
+            return
+        if self.animation_mode == "full" and self.state == "running" and (
+            self._is_moving() or self.pending_events or self.phase != "complete"
+        ):
+            self.finish_requested = True
+            if not any(
+                str(item.get("phase", "")).casefold() == "complete"
+                for item in self.pending_events
+            ) and self.phase != "complete":
+                self.pending_events.append({
+                    "phase": "complete", "status": "completed",
+                    "message": "Check complete",
+                })
+            self._sync_timer()
+            return
+        self._complete_finish()
+
+    def _complete_finish(self) -> None:
+        self.state = "completed"
+        self.phase = "complete"
+        self.message = "Check complete"
+        self.phase_states["complete"] = "completed"
+        self.visited_phases.add("complete")
+        self.finish_requested = False
+        self.turn_from = self.turn_to = 1.0
+        self.position_from = self.position_to = self.PHASE_POSITIONS["complete"]
         self.timer.stop()
         self._update_accessibility()
         self.update()
@@ -216,7 +312,21 @@ class RunJourneyWidget(QWidget):
 
     def _advance(self) -> None:
         self.frame += 1
+        if not self._is_moving() and self.pending_events:
+            self._apply_progress_event(self.pending_events.pop(0))
+        if (
+            self.finish_requested and not self.pending_events
+            and self.phase == "complete" and not self._is_moving()
+        ):
+            self._complete_finish()
         self.update()
+
+    def _is_moving(self) -> bool:
+        return (
+            self.animation_mode == "full"
+            and self.position_from != self.position_to
+            and self.frame - self.move_started < self.MOVE_FRAMES
+        )
 
     def _face_scale(self) -> float:
         if self.animation_mode != "full":
@@ -243,6 +353,14 @@ class RunJourneyWidget(QWidget):
         ratio_x, ratio_y = self._position_ratio()
         x = 20.0 + (width - 40.0) * ratio_x
         y = top_y + (bottom_y - top_y) * ratio_y
+        if self.phase == "correction":
+            x += 72.0
+        elif ratio_y <= .2:
+            y += 46.0
+        elif ratio_y >= .8:
+            y -= 46.0
+            if self.phase == "validation":
+                x -= 72.0
         if self.state == "running" and self.animation_mode == "full":
             y += 2.5 * math.cos(self.frame * .13)
         elif self.state == "running" and self.animation_mode == "reduced":
@@ -275,23 +393,34 @@ class RunJourneyWidget(QWidget):
         return icon, QRectF(icon.rect())
 
     def _active_edges(self) -> set[str]:
-        if self.state == "completed":
-            return set(self.COLORS)
-        if self.state != "running":
-            return set()
-        return {
-            "sources": {"source-intake"},
-            "projects": {"project-intake"},
-            "routing": {"project-intake"},
-            "release-metadata": {"source-intake", "source-match"},
-            "evidence": {"project-intake", "project-match"},
-            "consolidation": {"source-match", "project-match"},
-            "validation": {"validation"},
-            "correction": {"validation"},
-            "promotion": {"reports"},
-            "state-update": {"reports"},
-            "preflight": {"source-intake", "project-intake"},
-        }.get(self.phase, set())
+        return {self.phase} if self.state in {"running", "completed"} else set()
+
+    def _station_rectangles(
+        self, width: float, graph_top: float, graph_bottom: float,
+    ) -> dict[str, QRectF]:
+        """Lay out the real workflow as a two-row snake plus correction branch."""
+        gap = 8.0
+        node_width = min(116.0, max(66.0, (width - 36.0 - gap * 7) / 8.0))
+        node_height = 34.0
+        left = 18.0
+        right = max(left, width - 18.0 - node_width)
+        top_step = (right - left) / 7.0 if right > left else 0.0
+        bottom_step = (right - left) / 6.0 if right > left else 0.0
+        rectangles: dict[str, QRectF] = {}
+        for index, (phase, _label, _category) in enumerate(self.MAIN_STATIONS[:8]):
+            rectangles[phase] = QRectF(
+                left + top_step * index, graph_top, node_width, node_height,
+            )
+        for index, (phase, _label, _category) in enumerate(self.MAIN_STATIONS[8:]):
+            rectangles[phase] = QRectF(
+                right - bottom_step * index, graph_bottom, node_width, node_height,
+            )
+        validation = rectangles["validation"]
+        rectangles["correction"] = QRectF(
+            validation.x(), (graph_top + graph_bottom) / 2.0,
+            node_width, node_height,
+        )
+        return rectangles
 
     def paintEvent(self, _event) -> None:  # type: ignore[override]
         painter = QPainter(self)
@@ -340,83 +469,63 @@ class RunJourneyWidget(QWidget):
             Qt.AlignmentFlag.AlignVCenter, self.detail,
         )
 
-        y_top = max(116.0, min(145.0, height * .39))
-        y_bottom = max(184.0, min(242.0, height * .66))
-        center_y = (y_top + y_bottom) / 2
-        node_width = min(126.0, max(84.0, width * .13))
-        node_height = 36.0
-        source_x = 18.0
-        release_x = max(source_x + node_width + 28.0, width * .22)
-        match_x = max(release_x + node_width + 38.0, width * .46)
-        validate_x = max(match_x + node_width + 25.0, width * .65)
-        report_x = width - node_width - 18.0
-        if validate_x + node_width + 22.0 > report_x:
-            validate_x = report_x - node_width - 22.0
+        graph_top = max(116.0, min(145.0, height * .36))
+        graph_bottom = min(height - 58.0, graph_top + 126.0)
+        stations = self._station_rectangles(width, graph_top, graph_bottom)
+        top_center = stations["preflight"].center().y()
+        bottom_center = stations["complete"].center().y()
         fairy_point = self._fairy_position(
-            width, y_top + node_height / 2, y_bottom + node_height / 2,
+            width, top_center, bottom_center,
         )
         fairy_x, fairy_y = fairy_point.x(), fairy_point.y()
-        fairy_size = min(self.FAIRY_MAX_SIZE, max(52.0, height * .20))
+        fairy_size = min(self.FAIRY_MAX_SIZE, max(46.0, height * .17))
 
-        paths = {
-            "source-intake": self._curve(
-                QPointF(source_x + node_width, y_top + node_height / 2),
-                QPointF(release_x, y_top + node_height / 2),
-            ),
-            "project-intake": self._curve(
-                QPointF(source_x + node_width, y_bottom + node_height / 2),
-                QPointF(release_x, y_bottom + node_height / 2),
-            ),
-            "source-match": self._curve(
-                QPointF(release_x + node_width, y_top + node_height / 2),
-                QPointF(match_x, center_y + node_height / 2),
-            ),
-            "project-match": self._curve(
-                QPointF(release_x + node_width, y_bottom + node_height / 2),
-                QPointF(match_x, center_y + node_height / 2),
-            ),
-            "validation": self._curve(
-                QPointF(match_x + node_width, center_y + node_height / 2),
-                QPointF(validate_x, center_y + node_height / 2),
-            ),
-            "reports": self._curve(
-                QPointF(validate_x + node_width, center_y + node_height / 2),
-                QPointF(report_x, center_y + node_height / 2),
-            ),
-        }
-        active = self._active_edges()
-        for name, path in paths.items():
-            color = self.COLORS[name]
+        main_phases = [phase for phase, _label, _category in self.MAIN_STATIONS]
+        connections = list(zip(main_phases, main_phases[1:])) + [
+            ("validation", "correction"), ("correction", "report-staging"),
+        ]
+        station_categories = {
+            phase: category for phase, _label, category in self.MAIN_STATIONS
+        } | {"correction": "correction"}
+        active_connection = (self.travel_from_phase, self.phase)
+        for start_phase, end_phase in connections:
+            start_rect, end_rect = stations[start_phase], stations[end_phase]
+            if start_rect.center().y() == end_rect.center().y():
+                if start_rect.center().x() < end_rect.center().x():
+                    start = QPointF(start_rect.right(), start_rect.center().y())
+                    end = QPointF(end_rect.left(), end_rect.center().y())
+                else:
+                    start = QPointF(start_rect.left(), start_rect.center().y())
+                    end = QPointF(end_rect.right(), end_rect.center().y())
+            else:
+                start, end = start_rect.center(), end_rect.center()
+            path = self._curve(start, end)
+            color = self.STATION_COLORS[station_categories[end_phase]]
             inactive = QColor(color)
-            inactive.setAlpha(65)
-            painter.setPen(QPen(color if name in active else inactive, 2.2))
+            visited = start_phase in self.visited_phases and end_phase in self.visited_phases
+            inactive.setAlpha(135 if visited else 42)
+            is_active = active_connection == (start_phase, end_phase)
+            painter.setPen(QPen(color if is_active else inactive, 2.2))
             painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.drawPath(path)
             if (
-                self.state == "running" and name in active
+                self.state == "running" and is_active
                 and self.animation_mode == "full"
             ):
                 self._particles(painter, path, color)
-
-        self._node(painter, QRectF(source_x, y_top, node_width, node_height),
-                   "Advisory sources", "source-intake" in active,
-                   self.COLORS["source-intake"])
-        self._node(painter, QRectF(release_x, y_top, node_width, node_height),
-                   "Release metadata", bool(active & {"source-intake", "source-match"}),
-                   self.COLORS["source-match"])
-        self._node(painter, QRectF(source_x, y_bottom, node_width, node_height),
-                   "Local projects", "project-intake" in active,
-                   self.COLORS["project-intake"])
-        self._node(painter, QRectF(release_x, y_bottom, node_width, node_height),
-                   "Project evidence", bool(active & {"project-intake", "project-match"}),
-                   self.COLORS["project-match"])
-        self._node(painter, QRectF(match_x, center_y, node_width, node_height),
-                   "Match & consolidate", bool(active & {"source-match", "project-match"}),
-                   self.COLORS["validation"])
-        self._node(painter, QRectF(validate_x, center_y, node_width, node_height),
-                   "Validate", "validation" in active, self.COLORS["validation"])
-        self._node(painter, QRectF(report_x, center_y, node_width, node_height),
-                   "Report", "reports" in active, self.COLORS["reports"])
+        for phase, label, category in self.MAIN_STATIONS:
+            self._node(
+                painter, stations[phase], label, phase == self.phase,
+                phase in self.visited_phases, self.STATION_COLORS[category],
+            )
+        self._node(
+            painter, stations["correction"], "Correction", self.phase == "correction",
+            "correction" in self.visited_phases, self.STATION_COLORS["correction"],
+        )
+        spell_target = (
+            stations["report-staging"].center()
+            if self.phase == "correction" else stations["consolidation"].center()
+        )
 
         wand_tip = None
         phase_icon, phase_source = self._phase_pixmap()
@@ -444,8 +553,7 @@ class RunJourneyWidget(QWidget):
                 and self.phase in {"consolidation", "correction"}
                 and self._face_scale() > .5):
             self._spell(
-                painter, wand_tip,
-                QPointF(match_x + node_width * .18, center_y + node_height / 2),
+                painter, wand_tip, spell_target,
             )
         if self.state == "running" and self.animation_mode == "full":
             self._sparkles(painter, fairy_x, fairy_y, fairy_size)
@@ -525,13 +633,21 @@ class RunJourneyWidget(QWidget):
 
     @staticmethod
     def _node(
-        painter: QPainter, rect: QRectF, label: str, active: bool, color: QColor,
+        painter: QPainter, rect: QRectF, label: str, active: bool,
+        visited: bool, color: QColor,
     ) -> None:
         border = QColor(color)
-        border.setAlpha(230 if active else 85)
+        border.setAlpha(230 if active else 145 if visited else 65)
         painter.setPen(QPen(border, 1.5))
-        painter.setBrush(QColor("#12304a") if active else QColor("#0b1b31"))
+        painter.setBrush(
+            QColor("#12304a") if active
+            else QColor("#10253a") if visited else QColor("#0b1b31")
+        )
         painter.drawRoundedRect(rect, 8, 8)
-        painter.setPen(QColor("#f2f8ff") if active else QColor("#9fb4c8"))
-        painter.setFont(QFont("Sans Serif", 9, QFont.Weight.Bold))
+        painter.setPen(
+            QColor("#f2f8ff") if active
+            else QColor("#bfd5e5") if visited else QColor("#829bb1")
+        )
+        font_size = 7 if rect.width() < 90 else 8
+        painter.setFont(QFont("Sans Serif", font_size, QFont.Weight.Bold))
         painter.drawText(rect.adjusted(4, 2, -4, -2), Qt.AlignmentFlag.AlignCenter, label)

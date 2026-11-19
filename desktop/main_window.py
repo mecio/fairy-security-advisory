@@ -2411,7 +2411,12 @@ class MainWindow(QMainWindow):
             assessment = services.followup_match_assessment(activity, scored_candidates)
             if assessment:
                 confidence = str(assessment["confidence"])
-                score = int(assessment["score"])
+                score_min = int(assessment["score_min"])
+                score_max = int(assessment["score_max"])
+                score_label = (
+                    f"{score_min}%" if score_min == score_max
+                    else f"{score_min}–{score_max}%"
+                )
                 badge_colors = {
                     "confirmed": ("#163f32", "#8ff0b5", "Confirmed"),
                     "review": ("#4a3616", "#ffd166", "Needs review"),
@@ -2422,7 +2427,7 @@ class MainWindow(QMainWindow):
                 )
                 confidence_html = (
                     f'<span style="background:{background};color:{foreground};">'
-                    f'&nbsp;{label} · {score}%&nbsp;</span><br>'
+                    f'&nbsp;{label} · {score_label}&nbsp;</span><br>'
                 )
             else:
                 confidence = "unscored"
@@ -2465,8 +2470,15 @@ class MainWindow(QMainWindow):
             confidence_detail = ""
             if assessment:
                 breakdown = assessment.get("breakdown", {})
+                project_scores = assessment.get("project_scores", {})
                 confidence_detail = (
-                    f"\nCorrespondence: {assessment['score']}% ({confidence})"
+                    f"\nCorrespondence: {score_label} ({confidence}; conservative band)"
+                    + (
+                        "\nProjects: " + ", ".join(
+                            f"{project} {score}%"
+                            for project, score in project_scores.items()
+                        ) if project_scores else ""
+                    )
                     + (f"\nBreakdown: {json.dumps(breakdown, ensure_ascii=False)}" if breakdown else "")
                 )
             activity_label.setToolTip(

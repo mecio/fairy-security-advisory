@@ -17,10 +17,42 @@ except ImportError:
         PREREQUISITE_ABSENT, PREREQUISITE_STATUSES, SCORE_MODEL_VERSION,
         load_candidate_intake, score_candidate, validate_presentation_settings,
     )
+try:
+    from followup_archive import markdown_cells
+except ImportError:
+    from scripts.followup_archive import markdown_cells
+try:
+    from version_ranges import ranges_relation
+except ImportError:
+    from scripts.version_ranges import ranges_relation
 
 
 DECISIONS = {"immediate-action", "follow-up", "monitor", "not-applicable"}
 RELATIONS = {"overlaps", "disjoint", "unresolved"}
+
+
+def _followup_rows(text: str) -> list[dict[str, str]]:
+    headers: list[str] = []
+    rows: list[dict[str, str]] = []
+    for line in text.splitlines():
+        if not line.startswith("|"):
+            continue
+        cells = markdown_cells(line)
+        if not headers:
+            headers = cells
+        elif all(cell and set(cell) <= {"-", ":"} for cell in cells):
+            continue
+        elif len(cells) == len(headers):
+            rows.append(dict(zip(headers, cells)))
+    return rows
+
+
+def _row_projects(row: dict[str, str]) -> set[str]:
+    return {
+        value.strip().strip("`").casefold()
+        for value in re.split(r"\s*(?:;|,)\s*", row.get("Project", ""))
+        if value.strip().strip("`")
+    }
 
 
 def validate_candidate_ledger(
@@ -42,28 +74,14 @@ def validate_candidate_ledger(
     intake_by_id: dict[str, dict[str, Any]] = {}
     has_intake = candidate_intake_path is not None
     expected: set[tuple[str, str, str]] = set()
-    expected_sources: dict[str, str] = {}
     configured_presentation = validate_presentation_settings(finding_presentation)
     if candidate_intake_path is not None:
         intake = load_candidate_intake(candidate_intake_path)
-        expected_sources = {
-            str(item.get("id", "")): str(item.get("status", ""))
-            for item in intake["sources"]
-        }
         ledger_sources = document.get("sources")
         if not isinstance(ledger_sources, list):
             raise ValueError("candidate ledger needs a sources list")
-        actual_sources: dict[str, str] = {}
-        for source in ledger_sources:
-            if not isinstance(source, dict):
-                raise ValueError("candidate ledger source entries must be mappings")
-            source_id = str(source.get("id", "")).strip()
-            status = str(source.get("status", "")).strip()
-            if source_id in actual_sources or status not in {"complete", "partial", "failed"}:
-                raise ValueError("candidate ledger has an invalid or duplicate source result")
-            actual_sources[source_id] = status
-        if actual_sources != expected_sources:
-            raise ValueError("candidate ledger source accounting disagrees with candidate intake")
+        if ledger_sources != intake["sources"]:
+            raise ValueError("candidate ledger sources must be an immutable copy of candidate intake")
         for item in intake["candidates"]:
             candidate_id = str(item.get("candidate_id", "")).strip()
             intake_by_id[candidate_id] = item
@@ -80,6 +98,7 @@ def validate_candidate_ledger(
     seen: set[tuple[str, str, str]] = set()
     daily = daily_report.read_text(encoding="utf-8", errors="replace")
     followup_text = followup.read_text(encoding="utf-8", errors="replace")
+    followup_rows = _followup_rows(followup_text)
     for candidate in candidates:
         if not isinstance(candidate, dict):
             raise ValueError("candidate ledger entries must be mappings")
@@ -113,6 +132,17 @@ def validate_candidate_ledger(
                 raise ValueError("candidate ledger advisory ID disagrees with candidate intake")
             if key not in {str(value) for value in intake_candidate.get("technology_keys", [])}:
                 raise ValueError("candidate ledger technology key disagrees with candidate intake")
+            expected_constraints = list(intake_candidate.get("affected_constraints", []))
+            expected_relation = ranges_relation(declared, expected_constraints)
+            if (
+                str(candidate.get("affected_range", ""))
+                != str(intake_candidate.get("affected_range", ""))
+                or candidate.get("affected_constraints") != expected_constraints
+                or relation != expected_relation
+            ):
+                raise ValueError(
+                    "candidate ledger affected range or deterministic relation disagrees with intake"
+                )
             expected_score, expected_band, expected_breakdown = score_candidate(
                 candidate, intake_candidate, finding_presentation,
             )
@@ -161,19 +191,19 @@ def validate_candidate_ledger(
                 "candidate identifiers missing from the staged daily report: "
                 + ", ".join(missing_daily_markers)
             )
-        if decision in {"immediate-action", "follow-up"} and not re.search(
-            re.escape(advisory), followup_text, re.IGNORECASE,
-        ):
-            raise ValueError("an actionable candidate is missing from the staged follow-up")
         if decision in {"immediate-action", "follow-up"}:
-            missing_followup_markers = [
-                marker for marker in dict.fromkeys(required_markers)
-                if not re.search(re.escape(marker), followup_text, re.IGNORECASE)
-            ]
-            if missing_followup_markers:
+            matching_rows = []
+            for row in followup_rows:
+                advisory_cell = row.get("Advisory / CVE", "")
+                if all(
+                    re.search(re.escape(marker), advisory_cell, re.IGNORECASE)
+                    for marker in dict.fromkeys(required_markers)
+                ) and project_id.casefold() in _row_projects(row):
+                    matching_rows.append(row)
+            if not matching_rows:
                 raise ValueError(
-                    "candidate identifiers missing from the staged follow-up: "
-                    + ", ".join(missing_followup_markers)
+                    "actionable candidate identifiers and project must share one staged "
+                    f"follow-up row: {candidate_id or advisory}/{project_id}"
                 )
         if decision == "not-applicable" and not str(candidate.get("decision_reason", "")).strip():
             raise ValueError("an excluded candidate needs a decision reason")
