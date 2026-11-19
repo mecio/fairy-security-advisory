@@ -588,7 +588,7 @@ class DesktopWindowTest(unittest.TestCase):
         )
         journey.resize(720, 200)
         journey.start("sources")
-        self.assertEqual(journey._active_edges(), {"sources"})
+        self.assertEqual(journey._active_edges(), {"source-intake"})
         self.assertEqual(journey._face_scale(), -1.0)
         self.assertFalse(journey.grab().isNull())
         journey.finish(False)
@@ -627,6 +627,7 @@ class DesktopWindowTest(unittest.TestCase):
             animation_mode="full",
         )
         self.assertFalse(journey.idle_sprite.isNull())
+        self.assertLessEqual(journey.FAIRY_MAX_SIZE, 74.0)
         self.assertTrue(journey.timer.isActive())
         first_source = journey._phase_pixmap()[1]
         for _ in range(8):
@@ -634,13 +635,18 @@ class DesktopWindowTest(unittest.TestCase):
         self.assertNotEqual(journey._phase_pixmap()[1], first_source)
 
         journey.start("ai-check")
+        routing_start = journey._position_ratio()
         journey.progress({
             "phase": "validation", "status": "running", "provider": "codex",
             "detail": "3 staged reports · candidate ledger · coverage receipt",
             "attempt": 1, "max_attempts": 2,
         })
         self.assertEqual(journey.phase, "validation")
-        self.assertEqual(journey._active_edges(), {"matching", "reports"})
+        self.assertEqual(journey._active_edges(), {"validation"})
+        self.assertEqual(journey._position_ratio(), routing_start)
+        for _ in range(journey.MOVE_FRAMES):
+            journey._advance()
+        self.assertEqual(journey._position_ratio(), journey.PHASE_POSITIONS["validation"])
         self.assertFalse(journey._phase_icon().isNull())
         self.assertEqual((journey.attempt, journey.max_attempts), (1, 2))
 

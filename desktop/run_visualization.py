@@ -17,8 +17,12 @@ class RunJourneyWidget(QWidget):
     """Animate the current workflow phase without inventing scan percentages."""
 
     TURN_FRAMES = 12
+    MOVE_FRAMES = 18
+    FAIRY_MAX_SIZE = 74.0
     ANIMATION_MODES = frozenset({"full", "reduced", "disabled"})
-    INPUT_PHASES = frozenset({"sources", "projects", "routing", "evidence", "preflight"})
+    INPUT_PHASES = frozenset({
+        "sources", "projects", "routing", "release-metadata", "evidence", "preflight",
+    })
     PHASE_ASSETS = {
         "routing": "fairy-routing.png",
         "release-metadata": "fairy-sources.png",
@@ -38,10 +42,27 @@ class RunJourneyWidget(QWidget):
         "promotion": "Publishing", "state-update": "Checkpoints", "complete": "Complete",
     }
     COLORS = {
-        "sources": QColor("#4bd8eb"),
-        "projects": QColor("#a98bff"),
-        "matching": QColor("#71b9ff"),
+        "source-intake": QColor("#4bd8eb"),
+        "project-intake": QColor("#a98bff"),
+        "source-match": QColor("#48c8dc"),
+        "project-match": QColor("#9c86ee"),
+        "validation": QColor("#71b9ff"),
         "reports": QColor("#7ad99a"),
+    }
+    PHASE_POSITIONS = {
+        "idle": (.39, .50),
+        "preflight": (.11, .50),
+        "sources": (.16, .04),
+        "release-metadata": (.40, .04),
+        "projects": (.16, .96),
+        "routing": (.17, .96),
+        "evidence": (.40, .96),
+        "consolidation": (.43, .50),
+        "validation": (.625, .50),
+        "correction": (.625, .50),
+        "promotion": (.82, .50),
+        "state-update": (.88, .50),
+        "complete": (.91, .50),
     }
 
     def __init__(
@@ -52,8 +73,8 @@ class RunJourneyWidget(QWidget):
         self.setMinimumHeight(260)
         self.setAccessibleName("Security check activity animation")
         self.setToolTip(
-            "Illustrative workflow animation. Phase and provider follow process events; "
-            "project progress advances at provider boundaries."
+            "The connected stations follow real process milestones. In full mode fAIry "
+            "moves between the station associated with each phase."
         )
         self.icon = QPixmap(str(icon_path))
         self.phase_icons = {
@@ -77,6 +98,9 @@ class RunJourneyWidget(QWidget):
         self.turn_from = 1.0
         self.turn_to = 1.0
         self.turn_started = 0
+        self.position_from = self.PHASE_POSITIONS["idle"]
+        self.position_to = self.PHASE_POSITIONS["idle"]
+        self.move_started = 0
         self.timer = QTimer(self)
         self.timer.setInterval(70 if self.animation_mode == "full" else 240)
         self.timer.timeout.connect(self._advance)
@@ -100,11 +124,12 @@ class RunJourneyWidget(QWidget):
 
     def start(self, action: str) -> None:
         self.state = "running"
-        self.phase = {
+        next_phase = {
             "ai-check": "routing", "sources": "sources", "refresh": "projects",
             "prerequisites": "preflight", "validate": "preflight",
             "prepublish": "preflight",
         }.get(action, "preflight")
+        self.phase = next_phase
         self.agent = ""
         self.message = {
             "ai-check": "Preparing advisory analysis",
@@ -120,6 +145,9 @@ class RunJourneyWidget(QWidget):
         self.attempt = 0
         self.max_attempts = 0
         self.frame = 0
+        self.position_from = self.PHASE_POSITIONS["idle"]
+        self.position_to = self.PHASE_POSITIONS[next_phase]
+        self.move_started = 0
         self.turn_to = -1.0 if self.phase in self.INPUT_PHASES else 1.0
         self.turn_from = self.turn_to
         self.turn_started = 0
@@ -131,7 +159,12 @@ class RunJourneyWidget(QWidget):
         phase = str(event.get("phase") or "").casefold()
         status = str(event.get("status") or "running").casefold()
         facing_before = self._face_scale()
-        self.phase = phase if phase in self.PHASE_LABELS else self.phase
+        next_phase = phase if phase in self.PHASE_LABELS else self.phase
+        if next_phase != self.phase:
+            self.position_from = self._position_ratio()
+            self.position_to = self.PHASE_POSITIONS[next_phase]
+            self.move_started = self.frame
+        self.phase = next_phase
         facing_after = -1.0 if self.phase in self.INPUT_PHASES else 1.0
         if facing_after != self.turn_to:
             self.turn_from = facing_before
@@ -165,6 +198,7 @@ class RunJourneyWidget(QWidget):
         self.message = "Check complete" if success else "Check failed — review the log"
         if success:
             self.turn_from = self.turn_to = 1.0
+            self.position_from = self.position_to = self.PHASE_POSITIONS["complete"]
         self.timer.stop()
         self._update_accessibility()
         self.update()
@@ -190,6 +224,30 @@ class RunJourneyWidget(QWidget):
         elapsed = min(1.0, (self.frame - self.turn_started) / self.TURN_FRAMES)
         easing = (1.0 - math.cos(math.pi * elapsed)) / 2.0
         return self.turn_from + (self.turn_to - self.turn_from) * easing
+
+    def _position_ratio(self) -> tuple[float, float]:
+        """Return the current eased position inside the workflow graph."""
+        if self.animation_mode != "full":
+            return self.position_to
+        elapsed = min(1.0, max(0.0, (self.frame - self.move_started) / self.MOVE_FRAMES))
+        easing = (1.0 - math.cos(math.pi * elapsed)) / 2.0
+        return (
+            self.position_from[0] + (self.position_to[0] - self.position_from[0]) * easing,
+            self.position_from[1] + (self.position_to[1] - self.position_from[1]) * easing,
+        )
+
+    def _fairy_position(
+        self, width: float, top_y: float, bottom_y: float,
+    ) -> QPointF:
+        """Map the workflow-relative position to the current widget geometry."""
+        ratio_x, ratio_y = self._position_ratio()
+        x = 20.0 + (width - 40.0) * ratio_x
+        y = top_y + (bottom_y - top_y) * ratio_y
+        if self.state == "running" and self.animation_mode == "full":
+            y += 2.5 * math.cos(self.frame * .13)
+        elif self.state == "running" and self.animation_mode == "reduced":
+            y += .8 * math.sin(self.frame * .18)
+        return QPointF(x, y)
 
     def _wand_angle(self) -> float:
         if (
@@ -218,21 +276,21 @@ class RunJourneyWidget(QWidget):
 
     def _active_edges(self) -> set[str]:
         if self.state == "completed":
-            return {"sources", "projects", "matching", "reports"}
+            return set(self.COLORS)
         if self.state != "running":
             return set()
         return {
-            "sources": {"sources"},
-            "projects": {"projects"},
-            "routing": {"projects"},
-            "release-metadata": {"sources"},
-            "evidence": {"sources", "projects"},
-            "consolidation": {"matching", "reports"},
-            "validation": {"matching", "reports"},
-            "correction": {"matching", "reports"},
+            "sources": {"source-intake"},
+            "projects": {"project-intake"},
+            "routing": {"project-intake"},
+            "release-metadata": {"source-intake", "source-match"},
+            "evidence": {"project-intake", "project-match"},
+            "consolidation": {"source-match", "project-match"},
+            "validation": {"validation"},
+            "correction": {"validation"},
             "promotion": {"reports"},
             "state-update": {"reports"},
-            "preflight": {"sources", "projects"},
+            "preflight": {"source-intake", "project-intake"},
         }.get(self.phase, set())
 
     def paintEvent(self, _event) -> None:  # type: ignore[override]
@@ -282,38 +340,48 @@ class RunJourneyWidget(QWidget):
             Qt.AlignmentFlag.AlignVCenter, self.detail,
         )
 
-        y_top = max(116.0, min(136.0, height * .39))
-        y_bottom = max(174.0, min(215.0, height * .63))
-        node_width = min(147.0, width * 0.20)
-        source_x = 20.0
-        fairy_x = width * 0.40
-        fairy_y = (y_top + y_bottom) / 2 + 13
-        if self.state == "running" and self.animation_mode == "full":
-            fairy_x += 7.0 * math.sin(self.frame * .09)
-            fairy_y += 4.0 * math.cos(self.frame * .13)
-        elif self.state == "running" and self.animation_mode == "reduced":
-            fairy_y += 1.5 * math.sin(self.frame * .18)
-        report_x = width - node_width - 20
-        match_x = min(width * 0.62, report_x - node_width * .77 - 24)
+        y_top = max(116.0, min(145.0, height * .39))
+        y_bottom = max(184.0, min(242.0, height * .66))
         center_y = (y_top + y_bottom) / 2
-        fairy_size = min(170.0, max(112.0, height * 0.48))
+        node_width = min(126.0, max(84.0, width * .13))
+        node_height = 36.0
+        source_x = 18.0
+        release_x = max(source_x + node_width + 28.0, width * .22)
+        match_x = max(release_x + node_width + 38.0, width * .46)
+        validate_x = max(match_x + node_width + 25.0, width * .65)
+        report_x = width - node_width - 18.0
+        if validate_x + node_width + 22.0 > report_x:
+            validate_x = report_x - node_width - 22.0
+        fairy_point = self._fairy_position(
+            width, y_top + node_height / 2, y_bottom + node_height / 2,
+        )
+        fairy_x, fairy_y = fairy_point.x(), fairy_point.y()
+        fairy_size = min(self.FAIRY_MAX_SIZE, max(52.0, height * .20))
 
         paths = {
-            "sources": self._curve(
-                QPointF(source_x + node_width, y_top + 19),
-                QPointF(fairy_x - fairy_size * .40, fairy_y - 9),
+            "source-intake": self._curve(
+                QPointF(source_x + node_width, y_top + node_height / 2),
+                QPointF(release_x, y_top + node_height / 2),
             ),
-            "projects": self._curve(
-                QPointF(source_x + node_width, y_bottom + 19),
-                QPointF(fairy_x - fairy_size * .40, fairy_y + 18),
+            "project-intake": self._curve(
+                QPointF(source_x + node_width, y_bottom + node_height / 2),
+                QPointF(release_x, y_bottom + node_height / 2),
             ),
-            "matching": self._curve(
-                QPointF(fairy_x + fairy_size * .41, fairy_y + 3),
-                QPointF(match_x, center_y + 19),
+            "source-match": self._curve(
+                QPointF(release_x + node_width, y_top + node_height / 2),
+                QPointF(match_x, center_y + node_height / 2),
+            ),
+            "project-match": self._curve(
+                QPointF(release_x + node_width, y_bottom + node_height / 2),
+                QPointF(match_x, center_y + node_height / 2),
+            ),
+            "validation": self._curve(
+                QPointF(match_x + node_width, center_y + node_height / 2),
+                QPointF(validate_x, center_y + node_height / 2),
             ),
             "reports": self._curve(
-                QPointF(match_x + node_width * .77, center_y + 19),
-                QPointF(report_x, center_y + 19),
+                QPointF(validate_x + node_width, center_y + node_height / 2),
+                QPointF(report_x, center_y + node_height / 2),
             ),
         }
         active = self._active_edges()
@@ -330,13 +398,24 @@ class RunJourneyWidget(QWidget):
             ):
                 self._particles(painter, path, color)
 
-        self._node(painter, QRectF(source_x, y_top, node_width, 39),
-                   "Advisory sources", "sources" in active, self.COLORS["sources"])
-        self._node(painter, QRectF(source_x, y_bottom, node_width, 39),
-                   "Local projects", "projects" in active, self.COLORS["projects"])
-        self._node(painter, QRectF(match_x, center_y, node_width * .77, 39),
-                   "Match & verify", "matching" in active, self.COLORS["matching"])
-        self._node(painter, QRectF(report_x, center_y, node_width, 39),
+        self._node(painter, QRectF(source_x, y_top, node_width, node_height),
+                   "Advisory sources", "source-intake" in active,
+                   self.COLORS["source-intake"])
+        self._node(painter, QRectF(release_x, y_top, node_width, node_height),
+                   "Release metadata", bool(active & {"source-intake", "source-match"}),
+                   self.COLORS["source-match"])
+        self._node(painter, QRectF(source_x, y_bottom, node_width, node_height),
+                   "Local projects", "project-intake" in active,
+                   self.COLORS["project-intake"])
+        self._node(painter, QRectF(release_x, y_bottom, node_width, node_height),
+                   "Project evidence", bool(active & {"project-intake", "project-match"}),
+                   self.COLORS["project-match"])
+        self._node(painter, QRectF(match_x, center_y, node_width, node_height),
+                   "Match & consolidate", bool(active & {"source-match", "project-match"}),
+                   self.COLORS["validation"])
+        self._node(painter, QRectF(validate_x, center_y, node_width, node_height),
+                   "Validate", "validation" in active, self.COLORS["validation"])
+        self._node(painter, QRectF(report_x, center_y, node_width, node_height),
                    "Report", "reports" in active, self.COLORS["reports"])
 
         wand_tip = None
@@ -364,7 +443,10 @@ class RunJourneyWidget(QWidget):
                 and self.animation_mode == "full"
                 and self.phase in {"consolidation", "correction"}
                 and self._face_scale() > .5):
-            self._spell(painter, wand_tip, QPointF(match_x + node_width * .18, center_y + 19))
+            self._spell(
+                painter, wand_tip,
+                QPointF(match_x + node_width * .18, center_y + node_height / 2),
+            )
         if self.state == "running" and self.animation_mode == "full":
             self._sparkles(painter, fairy_x, fairy_y, fairy_size)
 
