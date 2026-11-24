@@ -10,7 +10,8 @@ from unittest.mock import patch
 from scripts.manage import (
     ANALYSIS_PROGRESS_PREFIX, ROOT, ai_command, analysis_prompt, consolidation_prompt,
     candidate_intake_prompt, correction_prompt,
-    consume_technology_selection, coverage_completion_status, emit_analysis_progress,
+    check_prerequisites, consume_technology_selection, coverage_completion_status,
+    emit_analysis_progress,
     prepare_analysis_service, refresh_inventory,
     render_cli_banner, run_ai_check,
     scoped_evidence_prompt, source_request, validate_canonical_report_updates,
@@ -89,6 +90,30 @@ class AdvisorySourceRequestTest(unittest.TestCase):
         ):
             self.assertTrue(prepare_analysis_service("codex", assume_yes=True))
         refresh.assert_not_called()
+
+    def test_stale_inventory_warns_without_failing_prerequisites(self) -> None:
+        with patch(
+            "scripts.manage.effective_config_path",
+            return_value=Path("config/local/projects.yaml"),
+        ), patch(
+            "scripts.manage.safe_load_yaml",
+            return_value={"project_roots": [{"path": "/tmp"}]},
+        ), patch(
+            "scripts.manage.configured_roots_ready", return_value=True,
+        ), patch(
+            "scripts.manage.inventory_is_current", return_value=(False, "200 hours old"),
+        ), patch(
+            "scripts.manage.agent_details", return_value=("1.0", True),
+        ), patch(
+            "scripts.manage.print_sandbox_preflight", return_value=True,
+        ), patch(
+            "scripts.manage.shutil.which", return_value="/usr/bin/tool",
+        ), patch("builtins.print") as output:
+            result = check_prerequisites("codex")
+
+        self.assertEqual(result, 0)
+        output.assert_any_call("WARN local inventory: 200 hours old")
+        output.assert_any_call("Required prerequisites are ready.")
 
     def test_explicit_inventory_refresh_creates_backup_before_scanning(self) -> None:
         backup = {"archive": ROOT / "output/config-backups/safety.zip"}

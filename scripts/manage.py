@@ -329,9 +329,7 @@ def check_prerequisites(provider: str | None = None) -> int:
         if not configured_roots_ready(config):
             failures += 1
         current, detail = inventory_is_current(config)
-        print(f"{'OK  ' if current else 'FAIL'} local inventory: {detail}")
-        if not current:
-            failures += 1
+        print(f"{'OK  ' if current else 'WARN'} local inventory: {detail}")
 
     providers = [provider] if provider else list(AI_PROMPTS)
     ready_agents = 0
@@ -1342,12 +1340,6 @@ def prepare_analysis_service(
     if not configured_roots_ready(config):
         print("Fix the configured project roots before starting the analysis.", file=sys.stderr)
         return False
-    current, detail = inventory_is_current(config)
-    if not current:
-        print(
-            f"Warning: local inventory is stale ({detail}). It is not refreshed "
-            "automatically; use the explicit inventory refresh action if desired."
-        )
     if validate_configuration() != 0:
         return False
     if check_prerequisites(provider) != 0:

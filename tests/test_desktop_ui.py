@@ -521,6 +521,29 @@ class DesktopWindowTest(unittest.TestCase):
         window.deleteLater()
         application.processEvents()
 
+    def test_failed_analysis_stops_indeterminate_progress_bars(self) -> None:
+        application = QApplication.instance() or QApplication([])
+        window = MainWindow()
+        window.run_journey.start("ai-check")
+        window._start_analysis_activity()
+        self.assertEqual(window.analysis_project_progress.maximum(), 0)
+        self.assertEqual(window.global_analysis_progress.maximum(), 0)
+
+        window._handle_analysis_progress({
+            "phase": "preflight", "status": "failed", "provider": "claude",
+            "message": "Prerequisites are incomplete",
+        })
+
+        self.assertFalse(window.analysis_activity_timer.isActive())
+        self.assertIsNone(window.analysis_started_at)
+        self.assertEqual(window.analysis_project_progress.maximum(), 1)
+        self.assertEqual(window.global_analysis_progress.maximum(), 1)
+        self.assertEqual(window.analysis_project_progress.format(), "Failed")
+        self.assertIn("failed", window.analysis_activity_label.text().casefold())
+        window.close()
+        window.deleteLater()
+        application.processEvents()
+
     def test_run_check_baselines_and_log_have_separate_full_height_tabs(self) -> None:
         application = QApplication.instance() or QApplication([])
         window = MainWindow()

@@ -3586,10 +3586,13 @@ class MainWindow(QMainWindow):
         final_text = f"{symbol} Analysis {state.lower()}{suffix}"
         self.analysis_activity_label.setText(final_text)
         self.global_analysis_label.setText(final_text)
-        if successful and self.analysis_project_progress.maximum() > 0:
-            maximum = self.analysis_project_progress.maximum()
-            self.analysis_project_progress.setValue(maximum)
-            self.global_analysis_progress.setValue(maximum)
+        for progress in (self.analysis_project_progress, self.global_analysis_progress):
+            if progress.maximum() == 0:
+                progress.setRange(0, 1)
+            if successful:
+                progress.setValue(progress.maximum())
+        if not successful:
+            self.analysis_project_progress.setFormat("Failed")
         self.analysis_started_at = None
         generation = self.analysis_activity_generation
         QTimer.singleShot(10000, lambda: self._hide_finished_analysis_activity(generation))
