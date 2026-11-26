@@ -555,7 +555,7 @@ class DesktopWindowTest(unittest.TestCase):
 
         self.assertEqual(
             [window.run_tabs.tabText(index) for index in range(window.run_tabs.count())],
-            ["Activity", "Technology baselines", "Detailed log"],
+            ["Activity", "Technologies", "Detailed log"],
         )
         self.assertTrue(window.run_tabs.widget(1).isAncestorOf(window.technology_scan_tree))
         self.assertTrue(
@@ -929,6 +929,47 @@ class DesktopWindowTest(unittest.TestCase):
         window.deleteLater()
         application.processEvents()
 
+    def test_gui_opens_without_installed_ai(self) -> None:
+        application = QApplication.instance() or QApplication([])
+        with patch(
+            "desktop.services.agent_component_status",
+            return_value=("Codex", "Missing", "not installed"),
+        ), patch(
+            "desktop.services.sandbox_preflight",
+            return_value={"state": "Missing", "details": "not installed"},
+        ):
+            window = MainWindow()
+        self.assertEqual(window.status_table.rowCount() > 0, True)
+        self.assertTrue(window.scan_selected_button.isEnabled())
+        window.close()
+        window.deleteLater()
+        application.processEvents()
+
+    def test_scan_preflight_uses_selected_technology_routing(self) -> None:
+        application = QApplication.instance() or QApplication([])
+        window = MainWindow()
+        selected = window.run_technology_view.selected_keys()
+        self.assertTrue(selected)
+        routing = {
+            "summary": "Codex: 1 project(s); Claude: 0 project(s); excluded: 1",
+            "groups": {"codex": 1, "claude": 0}, "excluded": 1,
+            "selected": 1, "required_providers": ["codex"],
+        }
+        with patch.object(services, "analysis_routing", return_value=routing) as plan, patch.object(
+            services, "ai_model", return_value="codex-model",
+        ) as model, patch.object(
+            services, "sandbox_preflight", return_value={"ready": True},
+        ) as sandbox, patch.object(
+            QMessageBox, "question", return_value=QMessageBox.StandardButton.No,
+        ):
+            window.run_ai_analysis()
+        plan.assert_called_once_with("codex", selected)
+        model.assert_called_once_with("codex", window.profile_combo.currentText())
+        sandbox.assert_called_once_with(["codex"])
+        window.close()
+        window.deleteLater()
+        application.processEvents()
+
     def test_scan_all_technologies_ignores_baseline_checkboxes(self) -> None:
         application = QApplication.instance() or QApplication([])
         window = MainWindow()
@@ -995,10 +1036,29 @@ class DesktopWindowTest(unittest.TestCase):
             "roles": ["backend"],
             "languages": [{"name": "Python"}],
             "advisory_checks": {"enabled": False, "preferred_ai": "claude"},
-        }]), patch("desktop.main_window.services.inventory_age", return_value="current"):
+        }]), patch("desktop.main_window.services.inventory_age", return_value="current"), patch(
+            "desktop.main_window.services.inventory_technology_rows", return_value=[{
+                "key": "python-key", "name": "Python", "version": "3.12",
+                "quality": "green", "baseline_status": "completed",
+                "reference_date": "2023-10-02T00:00:00Z",
+                "reference_source_url": "https://www.python.org/downloads/release/python-3120/",
+                "inventory_projects": ["api"], "enabled_projects": [],
+                "disabled_projects": ["api"], "projects": ["api"],
+            }],
+        ):
             window = MainWindow()
             window.load_inventory()
 
+        self.assertEqual(
+            [window.inventory_tabs.tabText(index)
+             for index in range(window.inventory_tabs.count())],
+            ["Projects", "Technologies"],
+        )
+        self.assertEqual(window.inventory_technology_view.tree.columnCount(), 8)
+        self.assertEqual(
+            window.inventory_technology_view.tree.topLevelItem(0).text(7),
+            "api (excluded)",
+        )
         self.assertEqual(window.inventory_tree.columnCount(), 6)
         item = window.inventory_tree.topLevelItem(0)
         selector = window.inventory_tree.itemWidget(item, 2)

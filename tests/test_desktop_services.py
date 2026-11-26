@@ -36,6 +36,32 @@ from desktop.services import (
 
 
 class DesktopConfigurationServicesTest(unittest.TestCase):
+    def test_analysis_routing_only_requires_providers_in_selected_technology_projects(self) -> None:
+        config = {"inventory": {"projects": [
+            {"id": "php-app", "path": "/php-app", "advisory_checks": {
+                "enabled": True, "preferred_ai": "codex",
+            }, "manual_technologies": [{
+                "category": "runtimes", "name": "PHP", "version": "8.3",
+            }]},
+            {"id": "node-app", "path": "/node-app", "advisory_checks": {
+                "enabled": True, "preferred_ai": "claude",
+            }, "manual_technologies": [{
+                "category": "runtimes", "name": "Node.js", "version": "22",
+            }]},
+        ]}}
+        from scripts.technology_state import collect_technology_scope
+        php_key = next(item["key"] for item in collect_technology_scope(config)
+                       if item["name"] == "PHP")
+        with patch("desktop.services.load_yaml", return_value=config):
+            selected = analysis_routing("codex", [php_key])
+            all_projects = analysis_routing("codex")
+            coordinated_by_claude = analysis_routing("claude", [php_key])
+        self.assertEqual(selected["required_providers"], ["codex"])
+        self.assertEqual(selected["groups"], {"codex": 1, "claude": 0})
+        self.assertEqual(selected["selected"], 1)
+        self.assertEqual(all_projects["required_providers"], ["codex", "claude"])
+        self.assertEqual(coordinated_by_claude["required_providers"], ["claude", "codex"])
+
     def test_work_animation_mode_is_validated_and_saved_privately(self) -> None:
         with TemporaryDirectory() as directory:
             config = Path(directory) / "config"

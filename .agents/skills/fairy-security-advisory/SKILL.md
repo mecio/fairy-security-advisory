@@ -68,14 +68,18 @@ or an in-scope source candidate from analysis.
    reports. Stop without updating reports if a required evidence phase fails.
    When the plan contains `technology_scope`, `baseline_scan`,
    `baseline_windows`, `run_kind`, and `source_windows`, treat them as
-   authoritative. Historical initialization is limited to selected baseline
-   combinations and starts at each exact version's official release date;
+   authoritative. The technology selection and routed provider groups define
+   the complete run boundary: do not inspect technologies or projects absent
+   from them. The launcher must stop before sources or AI when a selected
+   baseline lacks a baseline version, trusted reference date, or HTTPS
+   reference source. Historical initialization starts at each selected exact
+   version's validated official release date;
    package dependencies use their exact version, while runtimes, databases,
    operating systems, and similar platforms start at the applicable release
    line recorded in `baseline_version`;
    `source_windows` independently bound the incremental portion of a hybrid
    run. Ordinary applicability analysis
-   is limited to current inventoried versions. Ignore advisories whose affected
+   is limited to the selected current inventoried versions. Ignore advisories whose affected
    ranges cannot include the current version. Unknown versions require a
    generic low-confidence scan and an explicit human-review limitation.
 4. Open every candidate advisory and collect its identifier/CVE, affected and fixed versions, prerequisites, vector, mitigations, and date. Confirm through primary sources in this order: vendor, official project, CVE record. Treat aggregators as signals, not sole evidence. When the launcher supplies `candidate-intake.json`, treat it as immutable: preserve every candidate ID and exact advisory/source/CVE identifier in the ledger and staged reports. Do not invent correspondence scores; the launcher calculates them deterministically and presentation thresholds never remove candidates.
@@ -122,8 +126,9 @@ receipt with one status for every selected baseline and every active source.
 Never mark a source complete from reachability alone; partial or failed source
 coverage must not advance its checkpoint.
 For every completed baseline receipt, record `baseline_version`, `release_date`,
-`release_source_url`, `searched_since`, and `searched_until`. Use `partial` when the official release date or complete
-historical interval cannot be verified.
+`release_source_url`, `searched_since`, and `searched_until`. Use the validated
+release reference from the plan and use `partial` when the complete historical
+interval cannot be verified.
 
 ## Constraints
 

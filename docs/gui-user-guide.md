@@ -308,8 +308,13 @@ subscription remainder.
 
 ## Technology inventory
 
-The Technology inventory page shows one row per project, with its roles and a
-summary of technologies and effective versions. Select a project and click
+The Technology inventory page has two complementary views. **Projects** shows
+one row per project, with its roles and a summary of technologies and effective
+versions. **Technologies** shows one row per deduplicated technology/version
+combination, its inventory or production context, evidence quality, baseline,
+reference date, and every project that uses it. Projects excluded from advisory
+checks remain visible there and are marked as excluded, making missing version
+or reference data easy to find across the inventory. Select a project and click
 **Details** to inspect the individual technologies and their version evidence.
 The reload icon in the application toolbar rereads dynamic local data for every
 view without rescanning project paths or reloading configuration editors.
@@ -381,7 +386,7 @@ production evidence until the required evidence is entered and the dialog is
 saved. Administrator confirmation and authorized
 read-only checks are distinct from a reported, unverified value. Production
 records do not replace the inventory version. Every distinct inventory and
-production version appears separately in **Run check → Technology baselines**;
+production version appears separately in **Run check → Technologies**;
 when the same version exists in both contexts, one baseline retains both the
 inventory and production-environment evidence.
 
@@ -573,16 +578,19 @@ The Run security checks page contains deterministic preparation commands and
 the complete AI-assisted workflow. Choose an AI provider, model profile, and
 execution mode before starting the full analysis.
 
-The **Technology baselines** tab sits beside **Activity** and **Detailed log**
-and uses the full tab area for the selection table. Its list deduplicates identical technology/version
-combinations across selected projects. Missing baselines are preselected for a
-historical initialization scan; covered combinations remain available for a
+The **Technologies** tab sits beside **Activity** and **Detailed log** and reuses
+the aggregate Inventory technology view for active projects. Its checked rows
+define the complete run boundary: selected technology/version combinations,
+the projects that use them, incremental checks, and historical baselines.
+Missing baselines are preselected; covered combinations remain available for a
 manual rescan. Use **Filter technologies** to narrow the table by technology,
-version, context, baseline status, or project; filtering only changes visible
-rows and never changes their checkbox selections. Historical coverage starts at the selected version's official
-release date, while the same hybrid run retains a separate incremental window
-for already initialized technologies. Unknown versions receive a generic partial baseline and remain
-red in Inventory until a human supplies better evidence. Initialization and
+version, context, baseline status, reference date, or project; filtering only
+changes visible rows and never changes their checkbox selections. Historical
+coverage starts at the selected version's trusted official release date, while
+the same hybrid run retains a separate incremental window. A selected row with
+an unresolved baseline version, reference date, or HTTPS reference source
+blocks the run before source reachability or AI execution. Supply better
+inventory evidence or release metadata, then reload the view. Initialization and
 incremental runs append to the same daily report, with initialization labeled
 explicitly.
 Go requirements from `go.mod` show minimum-version hints in orange. The scanner
@@ -603,7 +611,8 @@ private local cache. When online release metadata is enabled, unresolved public
 package versions may be queried through deps.dev; private package identifiers
 must remain offline. Platform technologies use their release line rather than
 the date of an individual patch.
-Completed runs with any partial or failed baseline/source are archived as
+Completed runs with incomplete historical coverage after a validated start, or
+with any partial or failed source, are archived as
 **completed-with-limitations**. If every selected baseline fails, the operation
 fails and the missing baselines remain selected for the next attempt.
 If the coordinator produces invalid staged reports, candidate ledger, or
@@ -695,21 +704,28 @@ an API requires it, and respects the selected concurrency mode. Success means a
 source answered the configured request; it does not certify the completeness or
 accuracy of that source.
 
+Completed AI runs maintain source checkpoints per selected technology. Running
+a subset therefore never advances the incremental window of an unchecked
+technology; the next run uses the oldest applicable checkpoint plus the
+configured overlap.
+
 This action accesses the network but does not invoke the AI agent and does not
 modify scanned projects.
 
 ### Scan selected or all technologies
 
-**Scan selected technologies** starts the shared security-advisory skill and
-runs historical baselines only for the checked technology rows. **Scan all
-technologies** selects every listed row for historical baseline scanning,
-regardless of its checkbox. Both actions keep the normal incremental check over
-the complete active technology scope; when no row is checked, Scan selected is
-therefore an incremental-only run. The **Select all technologies** checkbox above
+**Scan selected technologies** starts the shared security-advisory skill with
+the checked technology rows as its complete scope. Only projects that use a
+selected technology are routed, and incremental and historical checks use the
+same selection. **Scan all technologies** uses every listed active row,
+regardless of its checkbox. Scan selected does not start when no row is checked.
+The **Select all technologies** checkbox above
 the table selects or clears every row and shows an intermediate state when only
 some rows are checked. Before launch, fAIry validates configuration,
-warns about stale inventory without changing it, checks prerequisites, and
-tests source reachability. The agent is started from the fAIry project root so it receives
+warns about stale inventory without changing it, checks prerequisites, resolves
+and validates every selected release reference, and only then tests source
+reachability. A missing reference stops the operation before sources or AI. The
+agent is started from the fAIry project root so it receives
 the project instructions, skill, effective local configuration, inventory,
 reports, and follow-up context.
 

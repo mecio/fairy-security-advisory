@@ -37,9 +37,10 @@ including historical baselines and partial source runs.
 
 ## Historical and selected-technology checks
 
-- A selected baseline with an unresolved release date is partial, not empty.
-  Consult the configured sources within the available boundary and retain
-  relevant candidates with explicit historical-coverage limits.
+- A selected baseline requires a baseline version, trusted reference date, and
+  HTTPS reference source. If any is unresolved, the launcher stops before
+  source consultation, AI execution, or report updates. Do not replace this
+  preflight failure with a partial or generic historical scan.
 - A source candidate relevant to a selected technology must appear in the
   ledger even when the source pass is partial. Partial coverage prevents a
   completion claim and checkpoint advance; it does not erase candidates that

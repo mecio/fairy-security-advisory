@@ -7,9 +7,19 @@ and the project intends to use [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- Inventory and Run check now share a technology-centric view with versions,
+  evidence, release references, and the projects that use each combination.
+
 ### Changed
 
 - The interactive CLI splash now renders the `fAIry` name as ASCII art.
+- A Run check technology selection now defines the complete technology and
+  project scope; launch stops before source or AI work when a selected baseline
+  has no trusted reference date.
+- The desktop Scan preflight checks only the coordinator and providers routed
+  to projects in the selected technology scope.
 
 ## [0.2.1] - 2026-11-18
 

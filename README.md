@@ -357,8 +357,11 @@ selected when the complete analysis starts. An explicit Codex or Claude choice
 routes that project to the matching authenticated CLI. These settings are
 stored only in the ignored `config/local/projects.yaml` and survive inventory
 refreshes.
-Each project occupies one inventory row with a technology summary. Select a
-project and use **Details** to add a
+The Inventory page has complementary **Projects** and **Technologies** views.
+Projects keeps the per-project controls and technology summary. Technologies
+deduplicates each technology/version combination and shows its evidence,
+baseline, reference date, and every project that uses it; excluded projects
+remain visible and are marked. Select a project and use **Details** to add a
 technology with its category, optional version, and context. The dialog has
 an **Inventory technologies** tab for the table and an **Add / edit technology**
 tab for the form, plus separate **Production versions** and **Add / edit
@@ -630,19 +633,23 @@ requested explicitly, preserves evidence already in the report for the current
 UTC date, and carries unfinished follow-up activities into the new report. A
 stale inventory is reported but never refreshed implicitly.
 
-Run check lists canonical technology/version combinations across selected
-projects. Combinations without a baseline are preselected for a historical
-initialization scan; already covered combinations remain available for a manual
-rescan. **Scan selected technologies** uses the checked rows for historical
-baselines, while **Scan all technologies** uses every listed row. Both retain
-incremental checking over the complete active scope. **Select all technologies**
-toggles every baseline checkbox and displays a partial state for mixed selections.
-A hybrid run resolves each selected version's official release date and
-searches its baseline from that date through today, while retaining the
+Run check reuses the Inventory **Technologies** view for active projects and
+adds selection controls. The checked rows define the complete run scope:
+technologies, routed projects that use them, incremental checks, and historical
+baselines. The Scan preflight checks the coordinator and only the preferred AI
+providers of projects in that scope; missing AI tools are shown in System status
+without preventing the desktop from opening. **Scan all technologies** uses every listed active row. **Select all
+technologies** toggles every row and displays a partial state for mixed
+selections. Before any source reachability check or AI launch, the launcher
+resolves a baseline version, trusted official reference date, and HTTPS source
+for every selected row. If any reference is missing, the run stops with a
+preflight error and does not update reports. A hybrid run searches each
+selected baseline from its validated reference date through today, while retaining the
 per-source incremental window for technologies already initialized. Initialization and incremental runs append to the same daily report,
 with initialization sections labeled explicitly. Successful sources receive
-independent checkpoints; later runs start from each source's last success minus
-the configurable overlap (10 days by default). Failed or partial sources do not
+per-technology checkpoints; a subset run never advances excluded technologies.
+Later runs start from the oldest applicable source/technology success minus the
+configurable overlap (10 days by default). Failed or partial sources do not
 advance. State is private under `output/advisory-state.json`; technologies no
 longer present are removed from active state while prior daily reports remain
 the historical record.

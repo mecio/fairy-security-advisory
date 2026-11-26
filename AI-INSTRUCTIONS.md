@@ -157,17 +157,23 @@ applications.
    completed checks.
 
 When the launcher supplies technology baseline state, use the current
-technology/version combinations as the applicability boundary. A missing
+selected technology/version combinations and their routed projects as the
+complete applicability boundary. Never analyze a technology or project absent
+from the authoritative plan. A missing
 baseline triggers historical initialization for the selected combinations; a
 known baseline uses each source's last successful checkpoint minus the
-configured overlap. A hybrid run keeps these windows separate: resolve the
-official release date for every selected version and cover its baseline from
-that date through the run. Package dependencies use the exact resolved version;
+configured overlap. A hybrid run keeps these windows separate: use the
+launcher-validated official release date for every selected version and cover
+its baseline from that date through the run. Package dependencies use the exact resolved version;
 platform technologies use the beginning of their applicable release line.
 Check already initialized technologies
 from the incremental source windows. Do not advance a source checkpoint when its content
 coverage is unavailable, partial, or failed. A technology without a version
-receives a generic, explicitly partial baseline and human-review limitation.
+cannot enter a launcher-selected historical baseline. The launcher must stop
+before source consultation or AI execution when it cannot establish the
+baseline version, trusted reference date, and HTTPS reference source. Outside
+a routed baseline, an unknown version remains a generic, explicitly partial
+human-review limitation.
 Go `go.mod` requirements are minimum version hints, and `replace` directives
 in `go.mod` or `go.work` may change the code used. Workspace modules outside
 the selected project remain unresolved for human review. Until the effective
@@ -188,8 +194,9 @@ and notifications only and never remove a candidate or change applicability.
 In routed mode, account for every selected baseline and active source in the
 machine-readable evidence receipt requested by the launcher. Reachability alone
 never makes source coverage complete. A completed baseline receipt records its
-official release date and the actual searched interval; if those facts cannot
-be established, mark the baseline partial for human review.
+launcher-validated official release date and the actual searched interval. If
+complete historical coverage cannot be established after that validated start,
+mark the baseline partial for human review.
 Prefer verified metadata from the versioned shared release cache, then the
 private local cache, then approved public registry services. Never send private
 package names or local project identifiers to a public metadata service.

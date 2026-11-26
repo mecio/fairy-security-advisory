@@ -34,9 +34,10 @@ from scripts.ai_usage import codex_rate_limits, summarize_usage
 from scripts.analysis_plan import build_analysis_plan, plan_summary, required_providers
 from scripts.inventory import normalize_manual_technologies, normalize_production_technologies
 from scripts.technology_state import (
-    ambiguous_manual_dependencies, load_state_for_run, production_technology_records,
-    project_technology_records, scan_rows, StateError,
+    ambiguous_manual_dependencies, collect_technology_scope, load_state_for_run,
+    production_technology_records, project_technology_records, scan_rows, StateError,
 )
+from scripts.release_cache import ReleaseCacheError, resolve_release_metadata
 from scripts.desktop_integration import (
     desktop_entry_installed, install_linux_desktop_entry, integration_paths,
     remove_linux_desktop_entry,
@@ -236,6 +237,15 @@ def inventory_projects() -> list[dict[str, Any]]:
 
 def initialization_scan_rows() -> list[dict[str, Any]]:
     """Return deduplicated current technologies and their baseline state."""
+    return _technology_rows(include_disabled=False)
+
+
+def inventory_technology_rows() -> list[dict[str, Any]]:
+    """Return the shared technology view, including excluded inventory projects."""
+    return _technology_rows(include_disabled=True)
+
+
+def _technology_rows(*, include_disabled: bool) -> list[dict[str, Any]]:
     config = load_yaml(effective_config_path(CONFIG_DIR, "projects.example.yaml"))
     reports = reports_config()
     daily = ROOT / str(reports.get("daily_directory", "output/daily-advisory-check"))
@@ -243,7 +253,15 @@ def initialization_scan_rows() -> list[dict[str, Any]]:
         state = load_state_for_run(ROOT, daily)
     except StateError as error:
         raise ConfigurationError(f"Advisory state requires human review: {error}") from error
-    return scan_rows(config, state)
+    scope = collect_technology_scope(config, include_disabled=include_disabled)
+    try:
+        release_metadata = resolve_release_metadata(ROOT, scope, online_enabled=False)
+    except (OSError, ReleaseCacheError, ValueError) as error:
+        raise ConfigurationError(f"Release metadata requires human review: {error}") from error
+    return scan_rows(
+        config, state, include_disabled=include_disabled,
+        release_metadata=release_metadata,
+    )
 
 
 def write_technology_selection(keys: list[str]) -> Path:
@@ -354,12 +372,27 @@ def update_project_technologies(
     return project
 
 
-def analysis_routing(default_provider: str) -> dict[str, Any]:
-    """Return the effective local routing plan without exposing project paths."""
-    plan = build_analysis_plan(
-        load_yaml(effective_config_path(CONFIG_DIR, "projects.example.yaml")),
-        default_provider,
-    )
+def analysis_routing(
+    default_provider: str, technology_keys: list[str] | None = None,
+) -> dict[str, Any]:
+    """Return routing for the selected technologies without exposing project paths."""
+    config = load_yaml(effective_config_path(CONFIG_DIR, "projects.example.yaml"))
+    plan = build_analysis_plan(config, default_provider)
+    if technology_keys is not None:
+        original_selected = plan["selected_count"]
+        selected = set(technology_keys)
+        projects = {
+            project_id
+            for item in collect_technology_scope(config)
+            if item["key"] in selected
+            for project_id in item["projects"]
+        }
+        for provider, group in plan["groups"].items():
+            plan["groups"][provider] = [
+                project for project in group if project["id"] in projects
+            ]
+        plan["selected_count"] = sum(len(group) for group in plan["groups"].values())
+        plan["excluded_count"] += original_selected - plan["selected_count"]
     return {
         "summary": plan_summary(plan),
         "groups": {

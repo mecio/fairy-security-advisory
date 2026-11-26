@@ -12,8 +12,9 @@ from scripts.manage import (
     candidate_intake_prompt, correction_prompt,
     check_prerequisites, consume_technology_selection, coverage_completion_status,
     emit_analysis_progress,
+    missing_baseline_references,
     prepare_analysis_service, refresh_inventory,
-    render_cli_banner, run_ai_check,
+    render_cli_banner, restrict_plan_to_technology_projects, run_ai_check,
     scoped_evidence_prompt, source_request, validate_canonical_report_updates,
     promote_staged_reports, staged_report_paths, validate_staged_analysis_artifacts,
 )
@@ -21,6 +22,87 @@ from scripts.sandbox_preflight import claude_sandbox_settings
 
 
 class AdvisorySourceRequestTest(unittest.TestCase):
+    def test_explicit_technology_scope_filters_project_routing(self) -> None:
+        plan = {
+            "default_provider": "codex",
+            "groups": {
+                "codex": [{"id": "php-api", "path": "/php"}],
+                "claude": [{"id": "node-web", "path": "/node"}],
+            },
+            "excluded": [], "selected_count": 2, "excluded_count": 0,
+        }
+        restrict_plan_to_technology_projects(
+            plan, [{"key": "php-key", "projects": ["php-api"]}], enabled=True,
+        )
+        self.assertEqual(plan["groups"]["codex"], [{"id": "php-api", "path": "/php"}])
+        self.assertEqual(plan["groups"]["claude"], [])
+        self.assertEqual(plan["excluded"], [{"id": "node-web", "path": "/node"}])
+        self.assertEqual((plan["selected_count"], plan["excluded_count"]), (1, 1))
+
+    def test_missing_reference_requires_version_date_and_https_source(self) -> None:
+        self.assertEqual(
+            missing_baseline_references({
+                "php-key": {
+                    "baseline_version": "8.3.0", "since": None,
+                    "release_source_url": None,
+                },
+            }),
+            [("php-key", ["reference date", "reference source"])],
+        )
+        self.assertEqual(missing_baseline_references({
+            "php-key": {
+                "baseline_version": "8.3.0", "since": "2023-11-23T00:00:00Z",
+                "release_source_url": "https://www.php.net/releases/8.3/en.php",
+            },
+        }), [])
+
+    def test_selected_technology_without_reference_stops_before_sources_or_ai(self) -> None:
+        config = {"inventory": {"projects": [{
+            "id": "php-api", "path": "/projects/php-api",
+            "advisory_checks": {"enabled": True},
+            "manual_technologies": [{
+                "category": "runtimes", "name": "PHP", "version": "8.3",
+            }],
+        }]}}
+        from scripts.technology_state import collect_technology_scope
+        key = collect_technology_scope(config)[0]["key"]
+
+        def configuration(path: Path) -> dict:
+            return config if "projects" in path.name else {}
+
+        with patch(
+            "scripts.manage.prepare_analysis_service", return_value=True,
+        ), patch(
+            "scripts.manage.configured_models",
+            return_value=("balanced", {"codex": "codex-model", "claude": "claude-model"}),
+        ), patch(
+            "scripts.manage.configured_execution",
+            return_value=("economical", {"use_subagents": False, "max_subagents": 0}),
+        ), patch(
+            "scripts.manage.safe_load_yaml", side_effect=configuration,
+        ), patch(
+            "scripts.manage.load_state_for_run",
+            return_value={"schema_version": 1, "baselines": {}, "sources": {}},
+        ), patch(
+            "scripts.manage.resolve_release_metadata", return_value={},
+        ), patch(
+            "scripts.manage.check_sources", return_value=0,
+        ) as sources, patch(
+            "scripts.manage.ai_command",
+        ) as ai, patch(
+            "scripts.manage.confirm", return_value=True,
+        ) as confirm:
+            result = run_ai_check(
+                "codex", "balanced", "economical", assume_yes=True,
+                non_interactive=True, technology_keys=[key],
+                technology_selection_explicit=True,
+            )
+
+        self.assertEqual(result, 1)
+        sources.assert_not_called()
+        ai.assert_not_called()
+        confirm.assert_not_called()
+
     def test_staged_reports_are_not_published_until_promoted(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
@@ -724,7 +806,9 @@ class AdvisorySourceRequestTest(unittest.TestCase):
             "groups": {"codex": [{"id": "example", "path": "/example"}], "claude": []},
             "selected_count": 1, "excluded_count": 0,
         }
-        with patch("scripts.manage.build_analysis_plan", return_value=plan):
+        with patch("scripts.manage.build_analysis_plan", return_value=plan), patch(
+            "scripts.manage.collect_technology_scope", return_value=[],
+        ), patch("scripts.manage.scan_rows", return_value=[]):
             self.assertEqual(run_ai_check("codex"), 0)
         run_command.assert_not_called()
 

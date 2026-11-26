@@ -305,8 +305,10 @@ def production_technology_records(project: dict[str, Any]) -> list[dict[str, str
     )
 
 
-def collect_technology_scope(config: dict[str, Any]) -> list[dict[str, Any]]:
-    """Deduplicate selected project technologies and retain their project mapping."""
+def collect_technology_scope(
+    config: dict[str, Any], *, include_disabled: bool = False,
+) -> list[dict[str, Any]]:
+    """Deduplicate technologies and retain project and analysis-scope mappings."""
     combined: dict[str, dict[str, Any]] = {}
     projects = config.get("inventory", {}).get("projects", [])
     if not isinstance(projects, list):
@@ -315,7 +317,10 @@ def collect_technology_scope(config: dict[str, Any]) -> list[dict[str, Any]]:
         if not isinstance(project, dict):
             continue
         settings = project.get("advisory_checks", {})
-        if isinstance(settings, dict) and settings.get("enabled", True) is False:
+        enabled = not (
+            isinstance(settings, dict) and settings.get("enabled", True) is False
+        )
+        if not enabled and not include_disabled:
             continue
         project_id = _clean(project.get("id")) or "unnamed"
         inventory_records = project_technology_records(project)
@@ -366,6 +371,11 @@ def collect_technology_scope(config: dict[str, Any]) -> list[dict[str, Any]]:
                 entry["source"] = scope_record["source"]
             if project_id not in entry["projects"]:
                 entry["projects"].append(project_id)
+            scope_projects = entry.setdefault(
+                "enabled_projects" if enabled else "disabled_projects", [],
+            )
+            if project_id not in scope_projects:
+                scope_projects.append(project_id)
             if is_production:
                 deployment = {
                     "project": project_id,
@@ -385,6 +395,9 @@ def collect_technology_scope(config: dict[str, Any]) -> list[dict[str, Any]]:
         entry["projects"].sort(key=str.casefold)
         if "inventory_projects" in entry:
             entry["inventory_projects"].sort(key=str.casefold)
+        for field in ("enabled_projects", "disabled_projects"):
+            if field in entry:
+                entry[field].sort(key=str.casefold)
         if "production_deployments" in entry:
             entry["production_deployments"].sort(
                 key=lambda item: (item["project"].casefold(), item["environment"].casefold()),
@@ -442,14 +455,38 @@ def save_state(root: Path, state: dict[str, Any]) -> Path:
     return path
 
 
-def scan_rows(config: dict[str, Any], state: dict[str, Any]) -> list[dict[str, Any]]:
+def scan_rows(
+    config: dict[str, Any], state: dict[str, Any], *, include_disabled: bool = False,
+    release_metadata: dict[str, dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
     baselines = state.get("baselines", {})
+    metadata = release_metadata or {}
     rows = []
-    for item in collect_technology_scope(config):
+    for item in collect_technology_scope(config, include_disabled=include_disabled):
         baseline = baselines.get(item["key"], {}) if isinstance(baselines, dict) else {}
         baseline_status = baseline.get("status") if isinstance(baseline, dict) else None
         status = baseline_status or "missing"
-        rows.append({**item, "baseline_status": status, "selected": status == "missing"})
+        release = metadata.get(item["key"], {})
+        reference_date = str(release.get("release_date") or "")
+        baseline_version = (
+            release.get("baseline_version")
+            or (item.get("version") if item.get("ecosystem")
+                and item.get("source") not in UNRESOLVED_GO_SOURCES else None)
+        )
+        reference_source_url = str(release.get("source_url") or "")
+        reference_ready = bool(
+            baseline_version and reference_date
+            and reference_source_url.startswith("https://")
+        )
+        rows.append({
+            **item,
+            "baseline_status": status,
+            "selected": status == "missing",
+            "reference_date": reference_date,
+            "reference_baseline_version": str(baseline_version or ""),
+            "reference_source_url": reference_source_url,
+            "reference_status": "ready" if reference_ready else "missing",
+        })
     return rows
 
 
@@ -485,15 +522,31 @@ def record_completed_baselines(
 
 def incremental_since(
     state: dict[str, Any], source_id: str, overlap_days: int, now: dt.datetime,
+    technology_keys: Iterable[str] | None = None,
 ) -> str | None:
     source = state.get("sources", {}).get(source_id, {})
-    raw = source.get("last_success_at") if isinstance(source, dict) else None
-    if not isinstance(raw, str):
+    if not isinstance(source, dict):
+        return None
+    keys = list(dict.fromkeys(technology_keys or []))
+    checkpoint_map = source.get("technology_success_at", {})
+    if not isinstance(checkpoint_map, dict):
+        checkpoint_map = {}
+    raw_values = (
+        [checkpoint_map.get(key) or source.get("last_success_at") for key in keys]
+        if keys else [source.get("last_success_at")]
+    )
+    if any(not isinstance(raw, str) for raw in raw_values):
         return None
     try:
-        parsed = dt.datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        parsed_values = [
+            dt.datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+            for raw in raw_values
+        ]
     except ValueError:
         return None
+    if any(value.utcoffset() is None for value in parsed_values):
+        return None
+    parsed = min(parsed_values)
     return (parsed - dt.timedelta(days=overlap_days)).astimezone(dt.timezone.utc).isoformat().replace(
         "+00:00", "Z",
     )
@@ -536,11 +589,25 @@ def baseline_windows(
 
 def record_source_successes(
     state: dict[str, Any], source_ids: Iterable[str], completed_at: dt.datetime,
+    *, technology_keys: Iterable[str] | None = None, update_global: bool = True,
 ) -> None:
     timestamp = completed_at.astimezone(dt.timezone.utc).isoformat().replace("+00:00", "Z")
     sources = state.setdefault("sources", {})
+    keys = list(dict.fromkeys(technology_keys or []))
     for source_id in source_ids:
-        sources[source_id] = {"last_success_at": timestamp}
+        source = sources.setdefault(source_id, {})
+        if not isinstance(source, dict):
+            source = {}
+            sources[source_id] = source
+        if keys:
+            checkpoints = source.setdefault("technology_success_at", {})
+            if not isinstance(checkpoints, dict):
+                checkpoints = {}
+                source["technology_success_at"] = checkpoints
+            for key in keys:
+                checkpoints[key] = timestamp
+        if update_global:
+            source["last_success_at"] = timestamp
 
 
 def validate_evidence_state(

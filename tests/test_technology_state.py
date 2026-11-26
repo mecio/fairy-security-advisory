@@ -16,6 +16,30 @@ from scripts.technology_state import (
 
 
 class TechnologyStateTest(unittest.TestCase):
+    def test_inventory_scope_can_include_disabled_projects_without_run_scope(self) -> None:
+        config = {"inventory": {"projects": [
+            {
+                "id": "active", "advisory_checks": {"enabled": True},
+                "manual_technologies": [{
+                    "category": "runtimes", "name": "PHP", "version": "8.3",
+                }],
+            },
+            {
+                "id": "legacy", "advisory_checks": {"enabled": False},
+                "manual_technologies": [{
+                    "category": "runtimes", "name": "PHP", "version": "8.3",
+                }],
+            },
+        ]}}
+
+        run_scope = collect_technology_scope(config)
+        inventory_scope = collect_technology_scope(config, include_disabled=True)
+
+        self.assertEqual(run_scope[0]["projects"], ["active"])
+        self.assertEqual(inventory_scope[0]["projects"], ["active", "legacy"])
+        self.assertEqual(inventory_scope[0]["enabled_projects"], ["active"])
+        self.assertEqual(inventory_scope[0]["disabled_projects"], ["legacy"])
+
     def test_corrupt_or_symlinked_state_requires_human_review(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
@@ -380,6 +404,36 @@ class TechnologyStateTest(unittest.TestCase):
         )
         self.assertEqual(since, "2026-11-07T12:00:00Z")
         self.assertIsNone(incremental_since(state, "acn", 10, dt.datetime.now(dt.timezone.utc)))
+
+    def test_incremental_checkpoint_is_conservative_for_selected_technologies(self) -> None:
+        state = {"sources": {"osv": {
+            "last_success_at": "2026-10-01T12:00:00Z",
+            "technology_success_at": {"php": "2026-11-20T12:00:00Z"},
+        }}}
+        now = dt.datetime(2026, 11, 21, tzinfo=dt.timezone.utc)
+        self.assertEqual(
+            incremental_since(state, "osv", 10, now, ["php"]),
+            "2026-11-10T12:00:00Z",
+        )
+        self.assertEqual(
+            incremental_since(state, "osv", 10, now, ["php", "node"]),
+            "2026-09-21T12:00:00Z",
+        )
+
+    def test_subset_source_success_does_not_advance_global_checkpoint(self) -> None:
+        from scripts.technology_state import record_source_successes
+
+        state = {"sources": {"osv": {"last_success_at": "2026-10-01T12:00:00Z"}}}
+        completed = dt.datetime(2026, 11, 21, tzinfo=dt.timezone.utc)
+        record_source_successes(
+            state, ["osv"], completed,
+            technology_keys=["php"], update_global=False,
+        )
+        self.assertEqual(state["sources"]["osv"]["last_success_at"], "2026-10-01T12:00:00Z")
+        self.assertEqual(
+            state["sources"]["osv"]["technology_success_at"]["php"],
+            "2026-11-21T00:00:00Z",
+        )
 
     def test_baseline_window_is_independent_from_incremental_checkpoint(self) -> None:
         now = dt.datetime(2026, 11, 20, 12, tzinfo=dt.timezone.utc)

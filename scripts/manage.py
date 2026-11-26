@@ -887,10 +887,9 @@ def scoped_evidence_prompt(
         "recommended actions, and limitations. Include the project ID with every finding.\n\n"
         + (
             f"Read the authoritative plan at {plan_path}. Apply its technology_scope, "
-            "baseline_windows, and per-source source_windows. For each selected baseline "
-            "with a confirmed exact version, "
-            "resolve the official release date of that exact version first and search from "
-            "that date through baseline_windows[key].until. Apply source_windows separately "
+            "baseline_windows, and per-source source_windows. The launcher has already "
+            "validated each selected baseline's official reference date; search from that "
+            "date through baseline_windows[key].until. Apply source_windows separately "
             "to the incremental portion of the run. A null incremental source window means "
             "no successful checkpoint exists. Go declarations and replacement candidates "
             "are version hints, not selected build-list versions; scan them generically and "
@@ -978,9 +977,9 @@ def consolidation_prompt(
         "treat a read-only dossier as outside scope merely because another provider "
         "collected it. "
         "Read technology_scope, baseline_scan, baseline_windows, run_kind, and source_windows "
-        "from the plan. The run may be hybrid: resolve each selected version's official release "
-        "date and cover its complete baseline interval independently when the version is "
-        "confirmed, while applying source_windows "
+        "from the plan. The technology scope and provider groups are the complete selected "
+        "boundary. The run may be hybrid: use each validated official release date and cover "
+        "its complete baseline interval independently, while applying source_windows "
         "only to incremental coverage for already initialized technologies. "
         "Use current technology versions as the applicability filter: do not create findings "
         "for version ranges that cannot affect an inventoried version. Unknown versions require "
@@ -992,9 +991,7 @@ def consolidation_prompt(
         "identity, prerequisites, reachability, or incomplete evidence. When run_kind is "
         "initialization or hybrid, label the new historical section 'Initialization baseline'; "
         "label the ordinary portion as an incremental check. Reports are informational and must not change inventory "
-        "or scanned projects. Technology entries whose baseline_status is missing but whose keys "
-        "are absent from baseline_scan were deliberately deselected; continue the run but report "
-        "their incomplete coverage. "
+        "or scanned projects. Do not analyze technologies or projects absent from the plan. "
         "For every key in baseline_scan, include a line '- Technology key: `<key>` — ...' in the "
         "Initialization baseline section. Write a machine-readable JSON coverage receipt to the "
         f"exact path {evidence_state_path} with schema_version 1, a baselines list containing every "
@@ -1004,8 +1001,8 @@ def consolidation_prompt(
         '`id` (not `source_id`), for example {"id":"<source ID>","status":"partial"}. Every completed '
         "baseline must also contain baseline_version, ISO-8601 release_date, searched_since, searched_until, "
         "and an HTTPS release_source_url; "
-        "searched_since must be no later than the release date. Use partial when an official "
-        "release date or full historical coverage cannot be established. "
+        "searched_since must be no later than the release date. Use partial when full historical "
+        "coverage cannot be established after the validated start date. "
         f"Write a candidate ledger to {ledger_path}: schema_version 1 and one entry per "
         f"candidate from the immutable intake at {intake_path}. Preserve candidate_id and the exact "
         "advisory_id; never replace a specific bulletin or CVE with a generic label. Write one "
@@ -1331,6 +1328,7 @@ def ai_command(
 
 def prepare_analysis_service(
     provider: str, execution_mode: str | None = None, *, assume_yes: bool = False,
+    check_source_reachability: bool = True,
 ) -> bool:
     projects_config = effective_config_path(CONFIG_DIR, "projects.example.yaml")
     if projects_config == EXAMPLE_CONFIG:
@@ -1344,6 +1342,8 @@ def prepare_analysis_service(
         return False
     if check_prerequisites(provider) != 0:
         return False
+    if not check_source_reachability:
+        return True
     print("Checking advisory source reachability before AI launch...")
     return check_sources(execution_mode) == 0
 
@@ -1405,6 +1405,55 @@ def coverage_completion_status(
     return "completed"
 
 
+def restrict_plan_to_technology_projects(
+    plan: dict, technology_scope: list[dict], *, enabled: bool,
+) -> None:
+    """Make an explicit technology selection authoritative for project routing."""
+    if not enabled:
+        return
+    selected_projects = {
+        str(project_id)
+        for technology in technology_scope
+        for project_id in technology.get("projects", [])
+    }
+    removed: list[dict[str, str]] = []
+    for provider, projects in plan["groups"].items():
+        kept = [project for project in projects if project["id"] in selected_projects]
+        removed.extend(project for project in projects if project["id"] not in selected_projects)
+        plan["groups"][provider] = kept
+    existing_excluded = {
+        (item["id"], item["path"]) for item in plan.get("excluded", [])
+    }
+    plan.setdefault("excluded", []).extend(
+        project for project in removed
+        if (project["id"], project["path"]) not in existing_excluded
+    )
+    plan["excluded"].sort(key=lambda item: (item["id"].casefold(), item["path"]))
+    plan["selected_count"] = sum(len(group) for group in plan["groups"].values())
+    plan["excluded_count"] = len(plan["excluded"])
+
+
+def missing_baseline_references(
+    windows: dict[str, dict],
+) -> list[tuple[str, list[str]]]:
+    """Return selected baselines that cannot establish a trusted historical start."""
+    missing: list[tuple[str, list[str]]] = []
+    for key, window in windows.items():
+        fields = [
+            label for label, value in (
+                ("baseline version", window.get("baseline_version")),
+                ("reference date", window.get("since")),
+                ("reference source", window.get("release_source_url")),
+            ) if not value
+        ]
+        source = str(window.get("release_source_url") or "")
+        if source and not source.startswith("https://"):
+            fields.append("HTTPS reference source")
+        if fields:
+            missing.append((key, fields))
+    return missing
+
+
 def run_ai_check(
     provider: str | None = None, profile: str | None = None,
     execution_mode: str | None = None, *, assume_yes: bool = False,
@@ -1442,7 +1491,10 @@ def run_ai_check(
             return 0
     profile_name, models = configured_models(profile)
     mode_name, _mode = configured_execution(execution_mode)
-    if not prepare_analysis_service(provider, mode_name, assume_yes=assume_yes):
+    if not prepare_analysis_service(
+        provider, mode_name, assume_yes=assume_yes,
+        check_source_reachability=False,
+    ):
         print("Analysis was not started because one or more prerequisites failed.")
         return 1
     try:
@@ -1486,12 +1538,34 @@ def run_ai_check(
         technology["baseline_status"] = status_by_key.get(technology["key"], "missing")
     available_keys = {item["key"] for item in technology_scope}
     if technology_selection_explicit:
-        baseline_keys = list(dict.fromkeys(technology_keys or []))
+        selected_scope_keys = list(dict.fromkeys(technology_keys or []))
+        if not selected_scope_keys:
+            print(
+                "No technologies were selected; choose at least one technology for the run.",
+                file=sys.stderr,
+            )
+            return 1
+        baseline_keys = selected_scope_keys
     else:
+        selected_scope_keys = sorted(available_keys)
         baseline_keys = [row["key"] for row in rows if row["selected"]]
-    unknown_keys = sorted(set(baseline_keys) - available_keys)
+    unknown_keys = sorted(set(selected_scope_keys) - available_keys)
     if unknown_keys:
         print("Technology selection is stale; reload Run check and try again.", file=sys.stderr)
+        return 1
+    if technology_selection_explicit:
+        selected_key_set = set(selected_scope_keys)
+        technology_scope = [
+            item for item in technology_scope if item["key"] in selected_key_set
+        ]
+    restrict_plan_to_technology_projects(
+        plan, technology_scope, enabled=technology_selection_explicit,
+    )
+    if technology_selection_explicit and not plan["selected_count"]:
+        print(
+            "The selected technologies are not used by any active inventory project.",
+            file=sys.stderr,
+        )
         return 1
     overlap_days = int(reports_settings.get("incremental_overlap_days", 10))
     source_config = safe_load_yaml(
@@ -1505,7 +1579,9 @@ def run_ai_check(
     plan["technology_scope"] = technology_scope
     plan["baseline_scan"] = baseline_keys
     prior_baselines = state.get("baselines", {})
-    has_prior_baselines = isinstance(prior_baselines, dict) and bool(prior_baselines)
+    has_prior_baselines = isinstance(prior_baselines, dict) and any(
+        key in prior_baselines for key in baseline_keys
+    )
     plan["run_kind"] = (
         "initialization" if baseline_keys and not has_prior_baselines
         else "hybrid" if baseline_keys else "incremental"
@@ -1516,10 +1592,10 @@ def run_ai_check(
         release_settings = {}
     selected_scope = [item for item in technology_scope if item["key"] in set(baseline_keys)]
     emit_analysis_progress(
-        phase="preflight", status="completed", provider=provider,
+        phase="preflight", status="running", provider=provider,
         completed=0, total=plan["selected_count"],
-        message="Preflight checks completed",
-        detail="Configuration, scope, prerequisites, and advisory state validated",
+        message="Validating technology scope",
+        detail="Configuration, prerequisites, selection, and advisory state validated",
     )
     emit_analysis_progress(
         phase="release-metadata", status="running", provider=provider,
@@ -1540,9 +1616,32 @@ def run_ai_check(
     plan["baseline_windows"] = baseline_windows(
         technology_scope, baseline_keys, now, release_metadata,
     )
+    reference_errors = missing_baseline_references(plan["baseline_windows"])
+    if reference_errors:
+        print(
+            "Analysis was not started because selected technologies lack a trusted "
+            "reference date:",
+            file=sys.stderr,
+        )
+        for key, fields in reference_errors:
+            print(f"  - {key}: missing {', '.join(fields)}", file=sys.stderr)
+        print(
+            "Add or resolve official release metadata, then reload Run check and try again.",
+            file=sys.stderr,
+        )
+        emit_analysis_progress(
+            phase="release-metadata", status="failed", provider=provider,
+            completed=0, total=plan["selected_count"],
+            message="Technology reference date missing",
+            detail=f"{len(reference_errors)} selected technology reference(s) unresolved",
+        )
+        return 1
     plan["source_windows"] = {
         str(source.get("id")): {
-            "since": incremental_since(state, str(source.get("id")), overlap_days, now),
+            "since": incremental_since(
+                state, str(source.get("id")), overlap_days, now,
+                technology_keys=[item["key"] for item in technology_scope],
+            ),
             "mode": "incremental",
         }
         for source in active_sources if source.get("id")
@@ -1579,6 +1678,17 @@ def run_ai_check(
     ):
         print("Cancelled.")
         return 0
+    if active_sources:
+        print("Checking advisory source reachability before AI launch...")
+        if check_sources(mode_name) != 0:
+            print("Analysis was not started because advisory source checks failed.")
+            return 1
+    emit_analysis_progress(
+        phase="preflight", status="completed", provider=provider,
+        completed=0, total=plan["selected_count"],
+        message="Preflight checks completed",
+        detail="Technology references and advisory source reachability validated",
+    )
     started_at = dt.datetime.now(dt.timezone.utc)
     timestamp = started_at.strftime("%Y%m%dT%H%M%SZ")
     run_directory = (
@@ -2097,7 +2207,12 @@ def run_ai_check(
         )
         prune_inactive_baselines(state, available_keys)
         record_completed_baselines(state, technology_scope, baseline_results, finished)
-        record_source_successes(state, successful_sources, finished)
+        scoped_technology_keys = [item["key"] for item in technology_scope]
+        record_source_successes(
+            state, successful_sources, finished,
+            technology_keys=scoped_technology_keys,
+            update_global=set(scoped_technology_keys) == available_keys,
+        )
         try:
             save_state(ROOT, state)
         except OSError as error:

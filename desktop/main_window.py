@@ -63,6 +63,7 @@ from desktop.config_forms import (
 )
 from desktop.inventory_technologies_dialog import InventoryTechnologiesDialog
 from desktop.run_visualization import RunJourneyWidget
+from desktop.technology_view import TechnologyView
 
 
 STYLE = """
@@ -883,8 +884,13 @@ class MainWindow(QMainWindow):
     def _inventory_page(self) -> QWidget:
         page, layout = self._page(
             "Technology inventory",
-            "Choose projects and AI providers, and keep inventory and production versions distinct.",
+            "Review inventory by project or by technology, with versions and affected projects.",
         )
+        self.inventory_tabs = QTabWidget()
+        projects_page = QWidget()
+        projects_layout = QVBoxLayout(projects_page)
+        projects_layout.setContentsMargins(8, 10, 8, 8)
+        projects_layout.setSpacing(8)
         filters = QHBoxLayout()
         self.inventory_selected_filter = QCheckBox("Selected projects only")
         self.inventory_selected_filter.setToolTip(
@@ -909,7 +915,7 @@ class MainWindow(QMainWindow):
         )
         self.inventory_technology_filter.textChanged.connect(self.apply_inventory_filters)
         filters.addWidget(self.inventory_technology_filter, 1)
-        layout.addLayout(filters)
+        projects_layout.addLayout(filters)
         self.inventory_tree = QTreeWidget()
         self.inventory_tree.setHeaderLabels((
             "Check", "Project", "Preferred AI", "Roles", "Technologies", "Path",
@@ -925,7 +931,7 @@ class MainWindow(QMainWindow):
         self.inventory_tree.header().setSectionResizeMode(5, QHeaderView.ResizeMode.Stretch)
         self.inventory_tree.itemChanged.connect(self.update_inventory_count)
         self.inventory_tree.itemSelectionChanged.connect(self._update_inventory_technology_action)
-        layout.addWidget(self.inventory_tree, 1)
+        projects_layout.addWidget(self.inventory_tree, 1)
         buttons = QHBoxLayout()
         self.inventory_actions_layout = buttons
         self.edit_technologies_button = QPushButton("Details")
@@ -949,7 +955,24 @@ class MainWindow(QMainWindow):
         buttons.addStretch()
         self.inventory_count = QLabel()
         buttons.addWidget(self.inventory_count)
-        layout.addLayout(buttons)
+        projects_layout.addLayout(buttons)
+        self.inventory_tabs.addTab(projects_page, "Projects")
+
+        technologies_page = QWidget()
+        technologies_layout = QVBoxLayout(technologies_page)
+        technologies_layout.setContentsMargins(8, 10, 8, 8)
+        technologies_layout.setSpacing(8)
+        technologies_notice = QLabel(
+            "One row per technology and version. Projects excluded from advisory checks remain "
+            "visible and are marked as excluded. Edit data from the Projects tab and Details."
+        )
+        technologies_notice.setWordWrap(True)
+        technologies_notice.setStyleSheet("color:#9fb8cc; padding:4px 0;")
+        technologies_layout.addWidget(technologies_notice)
+        self.inventory_technology_view = TechnologyView(selectable=False)
+        technologies_layout.addWidget(self.inventory_technology_view, 1)
+        self.inventory_tabs.addTab(technologies_page, "Technologies")
+        layout.addWidget(self.inventory_tabs, 1)
         return page
 
     def _reports_page(self) -> QWidget:
@@ -1273,46 +1296,17 @@ class MainWindow(QMainWindow):
         layout.addWidget(routing_notice)
 
         scope_label = QLabel(
-            "Technology baselines — missing combinations are selected automatically. "
-            "Select an existing baseline to run a manual historical rescan."
+            "Technology scope — checked rows define the complete run: projects, sources, "
+            "incremental checks, and historical baselines. A selected row without a trusted "
+            "reference date blocks the run before sources or AI start."
         )
         scope_label.setWordWrap(True)
         scope_label.setStyleSheet("color:#9fb8cc; padding:4px 0;")
-        self.technology_scan_tree = QTreeWidget()
-        self.technology_scan_tree.setHeaderLabels((
-            "Scan", "Technology", "Version", "Context", "Evidence quality", "Baseline",
-            "Projects",
-        ))
-        self.technology_scan_tree.setRootIsDecorated(False)
-        self.technology_scan_tree.setAlternatingRowColors(True)
-        self.technology_scan_tree.itemChanged.connect(self._sync_baseline_toggle)
-        for column in (0, 2, 3, 4, 5):
-            self.technology_scan_tree.header().setSectionResizeMode(
-                column, QHeaderView.ResizeMode.ResizeToContents,
-            )
-        self.technology_scan_tree.header().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        self.technology_scan_tree.header().setSectionResizeMode(6, QHeaderView.ResizeMode.Stretch)
-        baseline_controls = QHBoxLayout()
-        self.baseline_select_all = QCheckBox("Select all technologies")
-        self.baseline_select_all.setTristate(True)
-        self.baseline_select_all.setToolTip(
-            "Select or clear every historical-baseline checkbox"
-        )
-        self.baseline_select_all.stateChanged.connect(self._set_all_baseline_checks)
-        baseline_controls.addWidget(self.baseline_select_all)
-        baseline_controls.addStretch()
-        baseline_controls.addWidget(QLabel("Filter"))
-        self.technology_baseline_filter = QLineEdit()
-        self.technology_baseline_filter.setPlaceholderText("Filter technologies…")
-        self.technology_baseline_filter.setClearButtonEnabled(True)
-        self.technology_baseline_filter.setToolTip(
-            "Filter baseline rows by technology, version, context, status, or project. "
-            "Filtering does not change checkbox selections."
-        )
-        self.technology_baseline_filter.textChanged.connect(
-            self.apply_technology_baseline_filter
-        )
-        baseline_controls.addWidget(self.technology_baseline_filter, 1)
+        self.run_technology_view = TechnologyView(selectable=True)
+        # Stable aliases for existing UI integrations and tests.
+        self.technology_scan_tree = self.run_technology_view.tree
+        self.baseline_select_all = self.run_technology_view.select_all
+        self.technology_baseline_filter = self.run_technology_view.filter_edit
 
         buttons = QHBoxLayout()
         prerequisites = QPushButton("Check prerequisites")
@@ -1333,7 +1327,7 @@ class MainWindow(QMainWindow):
         self.scan_selected_button = QPushButton("Scan selected technologies")
         self.scan_selected_button.setProperty("variant", "ai")
         self.scan_selected_button.setToolTip(
-            "Run the incremental check and historical baselines for checked technologies"
+            "Run only checked technologies and the projects that use them"
         )
         self.scan_selected_button.clicked.connect(
             lambda: self.run_ai_analysis(scan_all=False)
@@ -1342,7 +1336,7 @@ class MainWindow(QMainWindow):
         self.scan_all_button = QPushButton("Scan all technologies")
         self.scan_all_button.setProperty("variant", "ai")
         self.scan_all_button.setToolTip(
-            "Run the incremental check and historical baselines for every listed technology"
+            "Run every active technology and the projects that use them"
         )
         self.scan_all_button.clicked.connect(
             lambda: self.run_ai_analysis(scan_all=True)
@@ -1396,9 +1390,8 @@ class MainWindow(QMainWindow):
         baseline_layout.setContentsMargins(8, 10, 8, 8)
         baseline_layout.setSpacing(8)
         baseline_layout.addWidget(scope_label)
-        baseline_layout.addLayout(baseline_controls)
-        baseline_layout.addWidget(self.technology_scan_tree, 1)
-        self.run_tabs.addTab(baseline_page, "Technology baselines")
+        baseline_layout.addWidget(self.run_technology_view, 1)
+        self.run_tabs.addTab(baseline_page, "Technologies")
 
         log_page = QWidget()
         log_layout = QVBoxLayout(log_page)
@@ -1866,73 +1859,27 @@ class MainWindow(QMainWindow):
         self.inventory_tree.blockSignals(False)
         self.update_inventory_count()
         self._update_inventory_technology_action()
+        if hasattr(self, "inventory_technology_view"):
+            try:
+                self.inventory_technology_view.set_rows(
+                    services.inventory_technology_rows(), preserve_selection=False,
+                )
+            except services.ConfigurationError as error:
+                self.inventory_technology_view.set_error(str(error))
 
     def load_initialization_scope(self) -> None:
-        if not hasattr(self, "technology_scan_tree"):
+        if not hasattr(self, "run_technology_view"):
             return
-        self.technology_scan_tree.clear()
-        quality_labels = {"green": "Certain", "orange": "Uncertain", "red": "Missing"}
-        quality_colors = {
-            "green": QColor("#66d38f"), "orange": QColor("#e5a84b"), "red": QColor("#df6f6f"),
-        }
         try:
             rows = services.initialization_scan_rows()
         except services.ConfigurationError as error:
-            item = QTreeWidgetItem((
-                "", "Advisory state unavailable", "—", "—", "Missing", "Blocked", str(error),
-            ))
-            item.setForeground(4, QColor("#df6f6f"))
-            item.setForeground(5, QColor("#df6f6f"))
-            self.technology_scan_tree.addTopLevelItem(item)
-            self.apply_technology_baseline_filter()
-            self._sync_baseline_toggle()
+            self.run_technology_view.set_error(str(error))
             return
-        for row in rows:
-            deployments = row.get("production_deployments", [])
-            environments = sorted({
-                str(item.get("environment")) for item in deployments
-                if isinstance(item, dict) and item.get("environment")
-            }, key=str.casefold)
-            inventory_present = bool(row.get("inventory_projects"))
-            if environments and inventory_present:
-                context = "Inventory + production: " + ", ".join(environments)
-            elif environments:
-                context = "Production: " + ", ".join(environments)
-            else:
-                context = "Inventory"
-            item = QTreeWidgetItem((
-                "", row["name"], row.get("version") or "—",
-                context,
-                quality_labels.get(row["quality"], row["quality"]),
-                row["baseline_status"].replace("-", " ").title(),
-                ", ".join(row["projects"]),
-            ))
-            item.setData(0, Qt.ItemDataRole.UserRole, row["key"])
-            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
-            item.setCheckState(
-                0, Qt.CheckState.Checked if row["selected"] else Qt.CheckState.Unchecked,
-            )
-            color = quality_colors.get(row["quality"])
-            if color:
-                item.setForeground(2, color)
-                item.setForeground(4, color)
-            item.setToolTip(
-                4, "Version evidence quality only; this is not a vulnerability status."
-            )
-            self.technology_scan_tree.addTopLevelItem(item)
-        self.apply_technology_baseline_filter()
-        self._sync_baseline_toggle()
+        self.run_technology_view.set_rows(rows, preserve_selection=False)
 
     def apply_technology_baseline_filter(self, *_args: object) -> None:
-        if not hasattr(self, "technology_baseline_filter"):
-            return
-        query = self.technology_baseline_filter.text().casefold().strip()
-        for index in range(self.technology_scan_tree.topLevelItemCount()):
-            item = self.technology_scan_tree.topLevelItem(index)
-            searchable = " ".join(
-                item.text(column) for column in range(1, self.technology_scan_tree.columnCount())
-            ).casefold()
-            item.setHidden(bool(query and query not in searchable))
+        if hasattr(self, "run_technology_view"):
+            self.run_technology_view.apply_filter()
 
     def _baseline_checkable_items(self) -> list[QTreeWidgetItem]:
         return [
@@ -1943,36 +1890,12 @@ class MainWindow(QMainWindow):
         ]
 
     def _set_all_baseline_checks(self, state: int) -> None:
-        if self._updating_baseline_toggle:
-            return
-        checked = state != Qt.CheckState.Unchecked.value
-        self._updating_baseline_toggle = True
-        try:
-            for item in self._baseline_checkable_items():
-                item.setCheckState(
-                    0, Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked,
-                )
-        finally:
-            self._updating_baseline_toggle = False
-        self._sync_baseline_toggle()
+        if hasattr(self, "run_technology_view"):
+            self.run_technology_view.set_all_checks(state)
 
     def _sync_baseline_toggle(self, *_args: object) -> None:
-        if self._updating_baseline_toggle:
-            return
-        items = self._baseline_checkable_items()
-        selected = sum(
-            item.checkState(0) == Qt.CheckState.Checked for item in items
-        )
-        if not items or selected == 0:
-            state = Qt.CheckState.Unchecked
-        elif selected == len(items):
-            state = Qt.CheckState.Checked
-        else:
-            state = Qt.CheckState.PartiallyChecked
-        self.baseline_select_all.blockSignals(True)
-        self.baseline_select_all.setEnabled(bool(items))
-        self.baseline_select_all.setCheckState(state)
-        self.baseline_select_all.blockSignals(False)
+        if hasattr(self, "run_technology_view"):
+            self.run_technology_view.sync_select_all()
 
     def _update_inventory_technology_action(self) -> None:
         self.edit_technologies_button.setEnabled(self.inventory_tree.currentItem() is not None)
@@ -3379,22 +3302,18 @@ class MainWindow(QMainWindow):
         provider = self.provider_combo.currentText()
         profile = self.profile_combo.currentText()
         mode = self.mode_combo.currentText()
-        all_technology_keys = [
-            str(self.technology_scan_tree.topLevelItem(index).data(
-                0, Qt.ItemDataRole.UserRole,
-            ))
-            for index in range(self.technology_scan_tree.topLevelItemCount())
-        ]
-        technology_keys = all_technology_keys if scan_all else [
-            str(self.technology_scan_tree.topLevelItem(index).data(
-                0, Qt.ItemDataRole.UserRole,
-            ))
-            for index in range(self.technology_scan_tree.topLevelItemCount())
-            if self.technology_scan_tree.topLevelItem(index).checkState(0)
-            == Qt.CheckState.Checked
-        ]
+        all_technology_keys = self.run_technology_view.all_keys()
+        technology_keys = (
+            all_technology_keys if scan_all else self.run_technology_view.selected_keys()
+        )
+        if not technology_keys:
+            QMessageBox.warning(
+                self, "No technologies selected",
+                "Select at least one technology. The selection defines the complete run scope.",
+            )
+            return
         try:
-            routing = services.analysis_routing(provider)
+            routing = services.analysis_routing(provider, technology_keys)
             models = {
                 name: services.ai_model(name, profile)
                 for name in routing["required_providers"]
@@ -3427,19 +3346,35 @@ class MainWindow(QMainWindow):
         model_summary = ", ".join(
             f"{name}: {models[name]}" for name in routing["required_providers"]
         )
-        baseline_summary = (
+        scoped_projects = self.run_technology_view.project_ids(technology_keys)
+        project_summary = ", ".join(scoped_projects[:8]) or "none"
+        if len(scoped_projects) > 8:
+            project_summary += f", and {len(scoped_projects) - 8} more"
+        scope_summary = (
             f"all {len(all_technology_keys)} listed technologies"
             if scan_all else
             f"{len(technology_keys)} checked of {len(all_technology_keys)} listed technologies"
+        )
+        unresolved = len(self.run_technology_view.missing_reference_keys(
+            selected_only=not scan_all,
+        ))
+        reference_note = (
+            f"{unresolved} selected reference date(s) are not cached and must be resolved "
+            "before the run can start.\n"
+            if unresolved else "All selected reference dates are available locally.\n"
         )
         if QMessageBox.question(
             self, "Start AI analysis",
             f"Start routed analysis with {provider} as coordinator, profile {profile}, "
             f"and {mode} mode?\n\n"
-            f"Projects — {routing['summary']}\n"
+            f"Projects in scope — {len(scoped_projects)} ({project_summary})\n"
+            f"Configured AI routing — {routing['summary']}\n"
             f"Models — {model_summary}\n\n"
-            f"Historical baseline scan — {baseline_summary}.\n"
-            "Incremental checking still covers the complete active technology scope.\n\n"
+            f"Technology scope — {scope_summary}.\n"
+            "The same selection controls projects, sources, incremental checks, and "
+            "historical baselines.\n"
+            "Historical baseline scan — uses this same technology scope.\n"
+            f"{reference_note}\n"
             "Projects with '-' use the coordinator. Preferred Codex/Claude projects "
             "use that provider.\n\n"
             "The agent may access the network and update ignored local output files.",
