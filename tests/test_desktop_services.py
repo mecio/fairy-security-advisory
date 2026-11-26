@@ -31,11 +31,42 @@ from desktop.services import (
     update_project_technologies,
     update_inventory_preferences,
     write_technology_selection,
+    release_reference, save_release_reference,
     work_animation_mode,
 )
 
 
 class DesktopConfigurationServicesTest(unittest.TestCase):
+    def test_release_reference_can_be_saved_for_php_release_line(self) -> None:
+        record = {"category": "runtimes", "name": "PHP", "version": ">=7.2"}
+        with TemporaryDirectory() as directory, patch(
+            "desktop.services.ROOT", Path(directory),
+        ):
+            save_release_reference(
+                record, "7.2.0", "2017-11-30",
+                "https://www.php.net/releases/7_2_0.php",
+            )
+            saved = release_reference(record)
+            self.assertEqual(saved["baseline_version"], "7.2.0")
+            self.assertEqual(saved["release_date"], "2017-11-30")
+            composer_php = {
+                "category": "dependencies", "name": "php", "ecosystem": "composer",
+                "version": ">=7.2",
+            }
+            self.assertEqual(release_reference(composer_php)["release_date"], "2017-11-30")
+            with self.assertRaisesRegex(ConfigurationError, "HTTPS"):
+                save_release_reference(record, "7.2.0", "2017-11-30", "http://example.org")
+            with self.assertRaisesRegex(ConfigurationError, "release line"):
+                save_release_reference(
+                    record, "8.0.0", "2017-11-30", "https://www.php.net/",
+                )
+            with self.assertRaisesRegex(ConfigurationError, "exact package version"):
+                save_release_reference(
+                    {"category": "dependencies", "name": "example", "ecosystem": "npm",
+                     "version": "^1.0"},
+                    "^1.0", "2020-01-01", "https://example.org/releases",
+                )
+
     def test_analysis_routing_only_requires_providers_in_selected_technology_projects(self) -> None:
         config = {"inventory": {"projects": [
             {"id": "php-app", "path": "/php-app", "advisory_checks": {

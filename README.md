@@ -366,7 +366,10 @@ technology with its category, optional version, and context. The dialog has
 an **Inventory technologies** tab for the table and an **Add / edit technology**
 tab for the form, plus separate **Production versions** and **Add / edit
 production** tabs. Select a row and click **Edit selected**, or double-click it,
-to load its values in the form. A row without a version also enables **Find
+to load its values in the form. For a saved version, **Release reference…** records
+the baseline version, official release date, and HTTPS source in the private
+local release cache. This reference appears in both technology views after
+reloading. A row without a version also enables **Find
 inventory version with AI**, which opens the assistant with an editable read-only research
 prompt. When Inventory or Production edits are pending, fAIry asks whether to
 save them before navigation; declining keeps the dialog and its changes open.

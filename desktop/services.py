@@ -14,6 +14,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import urllib.parse
 from pathlib import Path
 from typing import Any
 
@@ -35,9 +36,13 @@ from scripts.analysis_plan import build_analysis_plan, plan_summary, required_pr
 from scripts.inventory import normalize_manual_technologies, normalize_production_technologies
 from scripts.technology_state import (
     ambiguous_manual_dependencies, collect_technology_scope, load_state_for_run,
-    production_technology_records, project_technology_records, scan_rows, StateError,
+    production_technology_records, project_technology_records, scan_rows,
+    technology_key, canonical_identity, canonical_scope_identity, StateError,
 )
-from scripts.release_cache import ReleaseCacheError, resolve_release_metadata
+from scripts.release_cache import (
+    LOCAL_CACHE, ReleaseCacheError, cache_key, load_cache,
+    platform_baseline_matches, resolve_release_metadata, save_local_cache,
+)
 from scripts.desktop_integration import (
     desktop_entry_installed, install_linux_desktop_entry, integration_paths,
     remove_linux_desktop_entry,
@@ -262,6 +267,71 @@ def _technology_rows(*, include_disabled: bool) -> list[dict[str, Any]]:
         config, state, include_disabled=include_disabled,
         release_metadata=release_metadata,
     )
+
+
+def release_reference(record: dict[str, Any]) -> dict[str, Any]:
+    """Read the effective local/shared release reference for one saved version."""
+    item = dict(record)
+    if canonical_scope_identity(
+        str(item.get("category") or "other"), str(item.get("name") or ""),
+        str(item.get("ecosystem") or ""),
+    )[:2] == ("product", "php"):
+        item.update(category="runtimes", name="PHP", ecosystem="")
+    item["key"] = technology_key(
+        str(item.get("category") or "other"), str(item.get("name") or ""),
+        str(item.get("version") or ""), str(item.get("ecosystem") or ""),
+    )
+    return resolve_release_metadata(ROOT, [item], online_enabled=False).get(item["key"], {})
+
+
+def save_release_reference(
+    record: dict[str, Any], baseline_version: str, release_date: str, source_url: str,
+) -> None:
+    """Store a human-verified official reference in the private release cache."""
+    name = str(record.get("name") or "").strip()
+    version = str(record.get("version") or "").strip()
+    ecosystem = str(record.get("ecosystem") or "").strip().casefold()
+    if canonical_scope_identity(
+        str(record.get("category") or "other"), name, ecosystem,
+    )[:2] == ("product", "php"):
+        name, ecosystem = "PHP", ""
+    baseline_version = baseline_version.strip()
+    release_date = release_date.strip()
+    source_url = source_url.strip()
+    if not name or not version:
+        raise ConfigurationError("Save a technology and its version before adding a release reference.")
+    try:
+        date = dt.date.fromisoformat(release_date)
+    except ValueError as error:
+        raise ConfigurationError("Reference date must be a calendar date in YYYY-MM-DD format.") from error
+    if date > dt.datetime.now(dt.timezone.utc).date():
+        raise ConfigurationError("Reference date cannot be in the future.")
+    parsed = urllib.parse.urlparse(source_url)
+    if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
+        raise ConfigurationError("Reference source must be a public HTTPS URL without credentials.")
+    if ecosystem:
+        if not re.fullmatch(r"v?\d+(?:\.\d+){1,3}(?:[-+][0-9A-Za-z.-]+)?", version):
+            raise ConfigurationError(
+                "Resolve an exact package version before adding its release reference."
+            )
+        if baseline_version != version:
+            raise ConfigurationError("Package baseline version must match the selected version.")
+    elif not platform_baseline_matches(version, baseline_version):
+        raise ConfigurationError("Baseline version must start the selected platform release line.")
+    lookup_name = name if ecosystem else canonical_identity(
+        str(record.get("category") or "other"), name,
+    )[1]
+    identity = cache_key(ecosystem or "platform", lookup_name, version)
+    cache = load_cache(ROOT / LOCAL_CACHE)
+    cache["entries"][identity] = {
+        "status": "verified", "ecosystem": ecosystem or "platform",
+        "name": lookup_name, "version": version,
+        "baseline_version": baseline_version,
+        "release_date": release_date, "source_url": source_url,
+        "source_kind": "human-verified-official-release",
+        "checked_at": dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z"),
+    }
+    save_local_cache(ROOT, cache)
 
 
 def write_technology_selection(keys: list[str]) -> Path:

@@ -22,7 +22,6 @@ from PySide6.QtWidgets import (
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
-    QHeaderView,
     QInputDialog,
     QLabel,
     QLineEdit,
@@ -36,6 +35,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+from desktop.table_columns import resizable_columns
 
 
 def _readonly_item(text: str) -> QTableWidgetItem:
@@ -65,14 +65,7 @@ class ProjectsConfigForm(QWidget):
         ))
         self.table.setAlternatingRowColors(True)
         self.table.verticalHeader().setDefaultSectionSize(44)
-        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
-        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
-        self.table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
-        self.table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.Fixed)
-        self.table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeMode.Fixed)
-        self.table.setColumnWidth(4, 108)
-        self.table.setColumnWidth(5, 98)
+        resizable_columns(self.table, (145, 330, 95, 230, 108, 98))
         self.table.cellDoubleClicked.connect(self._cell_double_clicked)
         layout.addWidget(self.table, 1)
 
@@ -251,12 +244,7 @@ class AdvisorySourcesConfigForm(QWidget):
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.table.setAlternatingRowColors(True)
         self.table.verticalHeader().setDefaultSectionSize(48)
-        for column in (0, 1, 5):
-            self.table.horizontalHeader().setSectionResizeMode(column, QHeaderView.ResizeMode.Stretch)
-        for column in (2, 3, 4):
-            self.table.horizontalHeader().setSectionResizeMode(column, QHeaderView.ResizeMode.ResizeToContents)
-        self.table.horizontalHeader().setSectionResizeMode(6, QHeaderView.ResizeMode.Fixed)
-        self.table.setColumnWidth(6, 232)
+        resizable_columns(self.table, (210, 350, 105, 100, 85, 200, 232))
         layout.addWidget(self.table, 1)
         actions = QHBoxLayout()
         add = QPushButton("Add advisory source…")
@@ -328,6 +316,7 @@ class AdvisorySourcesConfigForm(QWidget):
     def _edit_dialog(self, source: dict[str, Any]) -> dict[str, Any] | None:
         dialog = QDialog(self)
         dialog.setWindowTitle("Advisory source")
+        dialog.setWindowFlag(Qt.WindowType.WindowMaximizeButtonHint, True)
         dialog.setMinimumWidth(620)
         form = QFormLayout(dialog)
         name = QLineEdit(str(source.get("name", "")))
@@ -647,10 +636,7 @@ class AIAgentsConfigForm(QWidget):
             "Profile", "Description", "Codex model", "Claude model",
         ))
         self.profile_table.verticalHeader().setDefaultSectionSize(38)
-        self.profile_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
-        self.profile_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        self.profile_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
-        self.profile_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+        resizable_columns(self.profile_table, (135, 310, 175, 175))
         profile_group = QGroupBox("AI model profiles")
         profile_layout = QVBoxLayout(profile_group)
         profile_layout.addWidget(self.profile_table)
@@ -661,10 +647,7 @@ class AIAgentsConfigForm(QWidget):
             "Mode", "Description", "Parallel sources", "Use sub-agents", "Max sub-agents",
         ))
         self.mode_table.verticalHeader().setDefaultSectionSize(38)
-        self.mode_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
-        self.mode_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        for column in (2, 3, 4):
-            self.mode_table.horizontalHeader().setSectionResizeMode(column, QHeaderView.ResizeMode.ResizeToContents)
+        resizable_columns(self.mode_table, (135, 300, 150, 150, 150))
         mode_group = QGroupBox("Speed and consumption modes")
         mode_layout = QVBoxLayout(mode_group)
         mode_layout.addWidget(self.mode_table)

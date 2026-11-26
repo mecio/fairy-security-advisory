@@ -11,7 +11,7 @@ from typing import Any
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
-    QAbstractItemView, QCheckBox, QComboBox, QDialog, QFormLayout, QHBoxLayout, QHeaderView,
+    QAbstractItemView, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFormLayout, QHBoxLayout,
     QLabel, QLineEdit, QMessageBox, QPushButton, QTabWidget, QTableWidget, QTableWidgetItem,
     QVBoxLayout, QWidget,
 )
@@ -23,6 +23,8 @@ from scripts.inventory import (
 from scripts.technology_state import (
     ambiguous_manual_dependencies, project_technology_records, version_quality,
 )
+from desktop.table_columns import resizable_columns
+from desktop import services
 
 
 CATEGORY_LABELS = {
@@ -55,6 +57,7 @@ class InventoryTechnologiesDialog(QDialog):
         super().__init__(parent)
         self.project = project
         self.setWindowTitle("Edit project technologies")
+        self.setWindowFlag(Qt.WindowType.WindowMaximizeButtonHint, True)
         self.setMinimumSize(960, 680)
         self.manual = normalize_manual_technologies(project.get("manual_technologies", []))
         self.production = normalize_production_technologies(
@@ -63,6 +66,7 @@ class InventoryTechnologiesDialog(QDialog):
         self._initial_manual = [dict(item) for item in self.manual]
         self._initial_production = [dict(item) for item in self.production]
         self.ai_version_request: dict[str, Any] | None = None
+        self.reference_updated = False
         self._display_rows: list[dict[str, Any]] = []
         self._editing_record: dict[str, Any] | None = None
         self._editing_manual_index: int | None = None
@@ -99,14 +103,9 @@ class InventoryTechnologiesDialog(QDialog):
         self.inventory_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.inventory_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.inventory_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
-        self.inventory_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        self.inventory_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
-        self.inventory_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
-        self.inventory_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
-        self.inventory_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)
-        self.inventory_table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeMode.Stretch)
-        self.inventory_table.horizontalHeader().setSectionResizeMode(6, QHeaderView.ResizeMode.ResizeToContents)
-        self.inventory_table.horizontalHeader().setSectionResizeMode(7, QHeaderView.ResizeMode.ResizeToContents)
+        resizable_columns(
+            self.inventory_table, (190, 135, 125, 155, 155, 210, 130, 185),
+        )
         self.inventory_table.itemSelectionChanged.connect(self._update_table_actions)
         self.inventory_table.itemDoubleClicked.connect(lambda _item: self._edit_selected())
         table_layout.addWidget(self.inventory_table, 1)
@@ -119,6 +118,14 @@ class InventoryTechnologiesDialog(QDialog):
         self.edit_button.setEnabled(False)
         self.edit_button.clicked.connect(self._edit_selected)
         table_actions.addWidget(self.edit_button)
+        self.release_reference_button = QPushButton("Release reference…")
+        self.release_reference_button.setProperty("variant", "info")
+        self.release_reference_button.setToolTip(
+            "Enter the official release date, baseline version, and source URL for the selected version"
+        )
+        self.release_reference_button.setEnabled(False)
+        self.release_reference_button.clicked.connect(self._edit_release_reference)
+        table_actions.addWidget(self.release_reference_button)
         self.find_version_button = QPushButton("Find inventory version with AI")
         self.find_version_button.setProperty("variant", "ai")
         self.find_version_button.setToolTip(
@@ -231,14 +238,9 @@ class InventoryTechnologiesDialog(QDialog):
         self.production_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.production_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.production_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
-        for column in (0, 5):
-            self.production_table.horizontalHeader().setSectionResizeMode(
-                column, QHeaderView.ResizeMode.Stretch,
-            )
-        for column in (1, 2, 3, 4, 6):
-            self.production_table.horizontalHeader().setSectionResizeMode(
-                column, QHeaderView.ResizeMode.ResizeToContents,
-            )
+        resizable_columns(
+            self.production_table, (190, 135, 125, 150, 135, 230, 175),
+        )
         self.production_table.itemSelectionChanged.connect(self._update_production_actions)
         self.production_table.itemDoubleClicked.connect(
             lambda _item: self._edit_selected_production(),
@@ -499,6 +501,10 @@ class InventoryTechnologiesDialog(QDialog):
         row = self.inventory_table.currentRow()
         selected = 0 <= row < len(self._display_rows) and bool(self.inventory_table.selectedItems())
         self.edit_button.setEnabled(selected)
+        self.release_reference_button.setEnabled(
+            selected and bool(self._display_rows[row]["record"].get("version"))
+            and self._display_rows[row]["record"].get("source") != "excluded"
+        )
         self.remove_button.setEnabled(selected and self._display_rows[row]["manual_index"] is not None)
         missing_version = (
             selected
@@ -744,6 +750,68 @@ class InventoryTechnologiesDialog(QDialog):
         self.tabs.setCurrentIndex(1)
         self.version.setFocus()
         self.version.selectAll()
+
+    def _edit_release_reference(self) -> None:
+        row = self.inventory_table.currentRow()
+        if not 0 <= row < len(self._display_rows):
+            return
+        record = self._display_rows[row]["record"]
+        persisted = project_technology_records(self.project)
+        if not any(
+            item["category"] == record["category"]
+            and item["name"].casefold() == record["name"].casefold()
+            and item.get("ecosystem", "") == record.get("ecosystem", "")
+            and item.get("version", "") == record.get("version", "")
+            for item in persisted
+        ):
+            QMessageBox.warning(
+                self, "Save technology first",
+                "Save the inventory version, then reopen Details to add its release reference.",
+            )
+            return
+        try:
+            existing = services.release_reference(record)
+        except (OSError, ValueError) as error:
+            QMessageBox.critical(self, "Release reference unavailable", str(error))
+            return
+        dialog = QDialog(self)
+        dialog.setWindowTitle(f"Release reference: {record['name']} {record['version']}")
+        dialog.setWindowFlag(Qt.WindowType.WindowMaximizeButtonHint, True)
+        dialog.setMinimumWidth(620)
+        form = QFormLayout(dialog)
+        hint = QLabel(
+            "Use an official release page. The reference date is the start of the "
+            "historical advisory search for this version or release line."
+        )
+        hint.setWordWrap(True)
+        form.addRow(hint)
+        declared = str(record["version"])
+        default_baseline = declared if declared[:1].isdigit() else ""
+        baseline = QLineEdit(str(existing.get("baseline_version") or default_baseline))
+        baseline.setPlaceholderText("Exact release line, for example 7.2.0")
+        form.addRow("Baseline version", baseline)
+        date = QLineEdit(str(existing.get("release_date") or ""))
+        date.setPlaceholderText("YYYY-MM-DD")
+        form.addRow("Reference date", date)
+        source = QLineEdit(str(existing.get("source_url") or ""))
+        source.setPlaceholderText("https://official-project.example/release-notes")
+        form.addRow("Official source URL", source)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        form.addRow(buttons)
+        while dialog.exec() == QDialog.DialogCode.Accepted:
+            try:
+                services.save_release_reference(
+                    record, baseline.text(), date.text(), source.text(),
+                )
+            except (OSError, ValueError) as error:
+                QMessageBox.warning(dialog, "Invalid release reference", str(error))
+                continue
+            self.reference_updated = True
+            break
 
     def _add_or_update(self) -> None:
         candidate = {

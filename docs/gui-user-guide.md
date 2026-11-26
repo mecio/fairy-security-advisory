@@ -354,6 +354,11 @@ and exclusions. Select a row and click **Edit selected**, or double-click the
 row, to open its values in the **Add / edit technology** tab. Change the version
 or other fields, then click **Apply change** and **Save changes**. Editing one
 version leaves other detected versions of the same package in place. Use
+**Release reference…** on a saved technology version to enter its baseline
+version, official reference date (YYYY-MM-DD), and HTTPS release-page URL.
+This human-verified reference is stored in the private local release cache and
+becomes visible in Inventory and Run check after reloading. Save a newly added
+or changed version first, then reopen Details to attach its reference. Use
 **Add technology** to open a blank form for a missed technology, such as a
 database not named in a manifest. **Remove manual decision** removes a saved
 override or exclusion; detected findings remain in the inventory. When a
@@ -398,7 +403,9 @@ table means the detector did not find sufficient evidence; it does not prove a
 technology is absent from production.
 
 Use **Reload from paths** after adding a project,
-changing exclusions, or making significant dependency changes. The refresh:
+changing exclusions, or making significant dependency changes. A modal progress
+window shows elapsed time and blocks other GUI actions until the refresh finishes
+or fails. The refresh:
 
 1. reads enabled project roots and their exclusion rules;
 2. discovers Git repositories and eligible non-versioned projects;

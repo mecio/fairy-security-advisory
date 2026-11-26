@@ -12,12 +12,13 @@ import shutil
 import time
 from pathlib import Path
 
-from PySide6.QtCore import QProcess, QProcessEnvironment, QSize, Qt, QTimer, QUrl
+from PySide6.QtCore import QEvent, QProcess, QProcessEnvironment, QSize, Qt, QTimer, QUrl
 from PySide6.QtGui import (
     QCloseEvent, QColor, QDesktopServices, QFont, QKeySequence, QPalette, QPixmap,
     QShortcut, QTextCursor, QTextDocument,
 )
 from PySide6.QtWidgets import (
+    QAbstractButton,
     QAbstractItemView,
     QApplication,
     QCheckBox,
@@ -43,6 +44,7 @@ from PySide6.QtWidgets import (
     QStackedWidget,
     QStyle,
     QTabWidget,
+    QTabBar,
     QTableWidget,
     QTableWidgetItem,
     QTextBrowser,
@@ -63,6 +65,7 @@ from desktop.config_forms import (
 )
 from desktop.inventory_technologies_dialog import InventoryTechnologiesDialog
 from desktop.run_visualization import RunJourneyWidget
+from desktop.table_columns import resizable_columns
 from desktop.technology_view import TechnologyView
 
 
@@ -73,6 +76,7 @@ QWidget#actionCell { background: transparent; }
 QLabel#sidebarLogo { background: #0d1e35; border: 0; margin: 0; padding: 0; }
 QListWidget#navigation { background: #0d1e35; border: 0; padding: 12px; }
 QListWidget#navigation::item { padding: 0 14px; border-radius: 7px; margin: 3px 2px; }
+QListWidget#navigation::item:hover { background: #1a3853; }
 QListWidget#navigation::item:selected { background: #123e5a; color: #63e7ff; }
 QFrame#card { background: #10243d; border: 1px solid #1b3c58; border-radius: 10px; }
 QFrame#card QLabel { background: transparent; }
@@ -102,13 +106,20 @@ QLineEdit, QPlainTextEdit, QTextBrowser, QTreeWidget, QTableWidget, QListWidget 
 }
 QTreeWidget, QTableWidget { alternate-background-color: #0d1e35; }
 QTreeWidget::item, QTableWidget::item { color: #e8f2ff; padding: 5px 6px; }
+QTreeWidget::item:hover, QTableWidget::item:hover, QListWidget::item:hover {
+  background: #163653;
+}
 QTreeWidget::item:selected, QTableWidget::item:selected { background: #126582; color: #ffffff; }
 QTabWidget::pane { border: 1px solid #24415b; }
 QTabBar::tab { background: #10243d; padding: 8px 14px; }
+QTabBar::tab:hover { background: #1a506f; }
 QTabBar::tab:selected { background: #126582; }
 QComboBox { background: #10243d; border: 1px solid #24415b; border-radius: 5px; padding: 6px; }
+QComboBox:hover { border-color: #63e7ff; }
 QSpinBox { background: #10243d; border: 1px solid #24415b; border-radius: 5px; padding: 5px; }
 QCheckBox { spacing: 8px; padding: 4px 2px; }
+QCheckBox:hover { color: #63e7ff; }
+QToolButton:hover { background: #1680a3; }
 QCheckBox::indicator, QTableWidget::indicator, QListWidget::indicator, QTreeWidget::indicator {
   width: 18px; height: 18px;
 }
@@ -219,6 +230,7 @@ class SandboxSetupDialog(QDialog):
     def __init__(self, plan: dict[str, object], parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setWindowTitle("Configure the Linux AI sandbox")
+        self.setWindowFlag(Qt.WindowType.WindowMaximizeButtonHint, True)
         self.resize(780, 470)
         self.setMinimumSize(660, 420)
         layout = QVBoxLayout(self)
@@ -280,6 +292,58 @@ class SandboxSetupDialog(QDialog):
         layout.addLayout(actions)
 
 
+class InventoryRefreshDialog(QDialog):
+    """Keep inventory refresh visible and block other GUI actions until it ends."""
+
+    def __init__(self, parent: QWidget) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Refreshing inventory")
+        self.setWindowModality(Qt.WindowModality.ApplicationModal)
+        self.setWindowFlag(Qt.WindowType.WindowCloseButtonHint, False)
+        self.setFixedWidth(460)
+        self._running = True
+        self._started_at = time.monotonic()
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 22, 24, 22)
+        layout.setSpacing(14)
+        description = QLabel(
+            "Scanning configured project paths and rebuilding the technology "
+            "inventory. This may take several minutes."
+        )
+        description.setWordWrap(True)
+        layout.addWidget(description)
+        self.progress = QProgressBar()
+        self.progress.setRange(0, 0)
+        self.progress.setTextVisible(False)
+        layout.addWidget(self.progress)
+        self.elapsed_label = QLabel("Elapsed 00:00")
+        layout.addWidget(self.elapsed_label)
+        self.timer = QTimer(self)
+        self.timer.setInterval(1000)
+        self.timer.timeout.connect(self._update_elapsed)
+        self.timer.start()
+
+    def _update_elapsed(self) -> None:
+        minutes, seconds = divmod(int(time.monotonic() - self._started_at), 60)
+        self.elapsed_label.setText(f"Elapsed {minutes:02d}:{seconds:02d}")
+
+    def reject(self) -> None:
+        if not self._running:
+            super().reject()
+
+    def closeEvent(self, event: QCloseEvent) -> None:
+        if self._running:
+            event.ignore()
+        else:
+            super().closeEvent(event)
+
+    def finish(self) -> None:
+        self._running = False
+        self.timer.stop()
+        self.accept()
+
+
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
@@ -324,6 +388,7 @@ class MainWindow(QMainWindow):
         self.pending_issue_update: tuple[str, dict[str, str]] | None = None
         self.assistant_custom_context: dict[str, str] | None = None
         self.current_action: str | None = None
+        self.inventory_refresh_dialog: InventoryRefreshDialog | None = None
         self.pending_selection_file: Path | None = None
         self.process_output_buffer = ""
         self.analysis_activity_base = ""
@@ -340,8 +405,19 @@ class MainWindow(QMainWindow):
         self.developer_tools_active = services.developer_tools_enabled()
         self.work_animation_mode = services.work_animation_mode()
         self._build_interface()
+        QApplication.instance().installEventFilter(self)
         self.load_configuration()
         self.refresh_all()
+
+    def eventFilter(self, watched: object, event: QEvent) -> bool:
+        if isinstance(watched, (QAbstractButton, QComboBox, QTabBar)) and event.type() in {
+            QEvent.Type.Enter, QEvent.Type.EnabledChange,
+        }:
+            if watched.isEnabled():
+                watched.setCursor(Qt.CursorShape.PointingHandCursor)
+            else:
+                watched.unsetCursor()
+        return super().eventFilter(watched, event)
 
     def _build_interface(self) -> None:
         central = QWidget()
@@ -923,12 +999,7 @@ class MainWindow(QMainWindow):
         self.inventory_tree.setAlternatingRowColors(True)
         self.inventory_tree.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.inventory_tree.setStyleSheet("QTreeWidget::item { min-height: 32px; padding:2px; }")
-        for column in (0, 1, 2, 3):
-            self.inventory_tree.header().setSectionResizeMode(
-                column, QHeaderView.ResizeMode.ResizeToContents,
-            )
-        self.inventory_tree.header().setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)
-        self.inventory_tree.header().setSectionResizeMode(5, QHeaderView.ResizeMode.Stretch)
+        resizable_columns(self.inventory_tree, (70, 170, 130, 180, 320, 320))
         self.inventory_tree.itemChanged.connect(self.update_inventory_count)
         self.inventory_tree.itemSelectionChanged.connect(self._update_inventory_technology_action)
         projects_layout.addWidget(self.inventory_tree, 1)
@@ -1046,13 +1117,7 @@ class MainWindow(QMainWindow):
             QHeaderView.ResizeMode.Interactive
         )
         self.followup_table.horizontalHeader().setMinimumHeight(38)
-        for column, width in (
-            (0, 320), (1, 150), (2, 85), (3, 150), (4, 105), (5, 220), (6, 275),
-        ):
-            self.followup_table.horizontalHeader().setSectionResizeMode(
-                column, QHeaderView.ResizeMode.Interactive,
-            )
-            self.followup_table.setColumnWidth(column, width)
+        resizable_columns(self.followup_table, (320, 150, 85, 150, 105, 220, 275))
         self.followup_table.horizontalHeader().sectionResized.connect(
             lambda *_args: self._resize_followup_rows()
         )
@@ -1088,9 +1153,7 @@ class MainWindow(QMainWindow):
         self.logs_tree = QTreeWidget()
         self.logs_tree.setHeaderLabels(("Archive", "Status", "Coordinator"))
         self.logs_tree.setMinimumWidth(300)
-        self.logs_tree.header().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        self.logs_tree.header().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
-        self.logs_tree.header().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        resizable_columns(self.logs_tree, (210, 110, 135))
         self.logs_tree.currentItemChanged.connect(self.select_analysis_log_run)
         splitter.addWidget(self.logs_tree)
 
@@ -1424,11 +1487,7 @@ class MainWindow(QMainWindow):
         self.status_table.verticalHeader().setDefaultSectionSize(42)
         self.status_table.verticalHeader().setMinimumSectionSize(38)
         self.status_table.horizontalHeader().setMinimumHeight(38)
-        self.status_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
-        self.status_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
-        self.status_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
-        self.status_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
-        self.status_table.setColumnWidth(3, 230)
+        resizable_columns(self.status_table, (190, 115, 440, 230))
         layout.addWidget(self.status_table, 1)
         refresh = QPushButton("Refresh system status")
         refresh.setProperty("variant", "secondary")
@@ -1921,6 +1980,9 @@ class MainWindow(QMainWindow):
             return
         result = dialog.exec()
         if result != QDialog.DialogCode.Accepted:
+            if dialog.reference_updated:
+                self.load_inventory()
+                self.load_initialization_scope()
             return
         try:
             updated = services.update_project_technologies(
@@ -3420,8 +3482,18 @@ class MainWindow(QMainWindow):
             self._start_analysis_activity()
         self.stop_button.setEnabled(True)
         self.statusBar().showMessage(f"Running {action}…")
+        if action == "refresh":
+            self.inventory_refresh_dialog = InventoryRefreshDialog(self)
+            self.inventory_refresh_dialog.show()
         self.process.start(command[0], command[1:])
         self.process.closeWriteChannel()
+
+    def _close_inventory_refresh_dialog(self) -> None:
+        dialog = self.inventory_refresh_dialog
+        if dialog is not None:
+            self.inventory_refresh_dialog = None
+            dialog.finish()
+            dialog.deleteLater()
 
     def _read_process_output(self) -> None:
         data = bytes(self.process.readAllStandardOutput()).decode("utf-8", errors="replace")
@@ -3562,7 +3634,10 @@ class MainWindow(QMainWindow):
                 services.archive_closed_followups(services.ROOT)
             except (OSError, ValueError) as error:
                 self.log.appendPlainText(f"\nFollow-up archival warning: {error}\n")
-        self.refresh_all()
+        try:
+            self.refresh_all()
+        finally:
+            self._close_inventory_refresh_dialog()
 
     def _process_error(self, error: QProcess.ProcessError) -> None:
         if error != QProcess.ProcessError.FailedToStart:
@@ -3577,6 +3652,7 @@ class MainWindow(QMainWindow):
         self.current_action = None
         self.stop_button.setEnabled(False)
         self.statusBar().showMessage("Could not start operation", 8000)
+        self._close_inventory_refresh_dialog()
 
     def stop_process(self) -> None:
         if self.process.state() == QProcess.ProcessState.NotRunning:

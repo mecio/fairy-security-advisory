@@ -10,9 +10,10 @@ from typing import Any
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
-    QAbstractItemView, QCheckBox, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
+    QAbstractItemView, QCheckBox, QHBoxLayout, QLabel, QLineEdit,
     QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
 )
+from desktop.table_columns import resizable_columns
 
 
 class TechnologyView(QWidget):
@@ -63,12 +64,7 @@ class TechnologyView(QWidget):
         self.tree.setAlternatingRowColors(True)
         self.tree.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.tree.itemChanged.connect(self._item_changed)
-        for column in (0, 2, 3, 4, 5, 6):
-            self.tree.header().setSectionResizeMode(
-                column, QHeaderView.ResizeMode.ResizeToContents,
-            )
-        self.tree.header().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        self.tree.header().setSectionResizeMode(7, QHeaderView.ResizeMode.Stretch)
+        resizable_columns(self.tree, (64, 170, 130, 205, 145, 115, 175, 280))
         if not selectable:
             self.tree.setColumnHidden(0, True)
         layout.addWidget(self.tree, 1)
@@ -145,6 +141,8 @@ class TechnologyView(QWidget):
             item.setToolTip(
                 4, "Version evidence quality only; this is not a vulnerability status."
             )
+            for column in (1, 2, 3, 5, 7):
+                item.setToolTip(column, item.text(column))
             self.tree.addTopLevelItem(item)
         self.tree.blockSignals(False)
         self.apply_filter()

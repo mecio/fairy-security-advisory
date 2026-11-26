@@ -18,6 +18,7 @@ class EulaDialog(QDialog):
     def __init__(self, notice: str, version: str, parent=None) -> None:
         super().__init__(parent)
         self.setWindowTitle("fAIry Security Advisory — first-run notice")
+        self.setWindowFlag(Qt.WindowType.WindowMaximizeButtonHint, True)
         self.setModal(True)
         self.resize(780, 680)
         self.setMinimumSize(680, 560)

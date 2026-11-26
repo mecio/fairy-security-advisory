@@ -33,6 +33,24 @@ class ReleaseCacheError(ValueError):
     """Raised when a release cache exists but is unsafe or malformed."""
 
 
+def platform_baseline_matches(version: str, baseline_version: str) -> bool:
+    """Accept an exact release or the beginning of its declared release line."""
+    import re
+
+    declared = re.fullmatch(r"(?:>=|\^|~)?\s*(\d+(?:\.\d+)*)", version.strip())
+    baseline = re.fullmatch(r"\d+(?:\.\d+)*", baseline_version.strip())
+    if not declared or not baseline:
+        return False
+    lower = declared.group(1)
+    if baseline_version == version or baseline_version == lower:
+        return True
+    return baseline_version == lower + ".0" or (
+        not version.startswith((">=", "^", "~"))
+        and len(lower.split(".")) >= 3
+        and baseline_version == ".".join(lower.split(".")[:2]) + ".0"
+    )
+
+
 def cache_key(ecosystem: str, name: str, version: str) -> str:
     return "|".join((ecosystem.casefold(), name.casefold(), version.casefold()))
 
@@ -88,8 +106,9 @@ def load_cache(path: Path, *, missing_ok: bool = True) -> dict[str, Any]:
             baseline_version = entry.get("baseline_version")
             if baseline_version is not None and (
                 not isinstance(baseline_version, str) or not baseline_version.strip()
-                or (ecosystem == "platform" and baseline_version != version
-                    and not baseline_version.startswith(version + "."))
+                or (ecosystem == "platform" and not platform_baseline_matches(
+                    version, baseline_version,
+                ))
             ):
                 raise ReleaseCacheError(f"release cache has inconsistent baseline version: {key}")
     return data

@@ -13,24 +13,26 @@ from unittest.mock import patch
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 try:
-    from PySide6.QtCore import QProcess, QUrl
+    from PySide6.QtCore import QEvent, QProcess, QUrl
     from PySide6.QtCore import Qt
     from PySide6.QtGui import QColor, QKeySequence, QPalette
     from PySide6.QtWidgets import (
-        QApplication, QComboBox, QDialog, QHeaderView, QLabel, QMessageBox, QPushButton,
-        QToolTip, QTreeWidgetItem,
+        QApplication, QComboBox, QDialog, QHeaderView, QLabel, QLineEdit, QMessageBox, QPushButton,
+        QTableWidget, QToolTip, QTreeWidget, QTreeWidgetItem,
     )
     from desktop import services
     from desktop.eula_dialog import EulaDialog
     from desktop.inventory_technologies_dialog import InventoryTechnologiesDialog
     from desktop.main_window import (
-        BarChartCard, MainWindow, PAGE_ASSISTANT, PAGE_REPORTS, PAGE_RUN,
+        BarChartCard, InventoryRefreshDialog, MainWindow, PAGE_ASSISTANT,
+        PAGE_REPORTS, PAGE_RUN,
     )
     from desktop.run_visualization import RunJourneyWidget
 except ImportError:
     QApplication = None
     BarChartCard = None
     MainWindow = None
+    InventoryRefreshDialog = None
     PAGE_RUN = None
     PAGE_REPORTS = None
     PAGE_ASSISTANT = None
@@ -52,6 +54,120 @@ except ImportError:
 
 @unittest.skipUnless(QApplication is not None, "optional PySide6 dependency is not installed")
 class DesktopWindowTest(unittest.TestCase):
+    def test_inventory_refresh_loader_blocks_gui_until_process_finishes(self) -> None:
+        application = QApplication.instance() or QApplication([])
+        window = MainWindow()
+        window.show()
+        command = [sys.executable, "-c", "import time; time.sleep(0.2)"]
+        with patch("desktop.main_window.services.action_command", return_value=command), patch(
+            "desktop.main_window.services.archive_closed_followups"
+        ), patch.object(window, "refresh_all") as refresh_views:
+            window.start_action("refresh", assume_yes=True)
+            dialog = window.inventory_refresh_dialog
+            self.assertIsInstance(dialog, InventoryRefreshDialog)
+            self.assertTrue(dialog.isVisible())
+            self.assertEqual(application.activeModalWidget(), dialog)
+            self.assertEqual(dialog.progress.maximum(), 0)
+            dialog.reject()
+            dialog.close()
+            self.assertTrue(dialog.isVisible())
+            self.assertTrue(window.process.waitForFinished(5000))
+            application.processEvents()
+            self.assertIsNone(window.inventory_refresh_dialog)
+            self.assertFalse(dialog.isVisible())
+            refresh_views.assert_called_once()
+        window.close()
+        window.deleteLater()
+        application.processEvents()
+
+    def test_inventory_refresh_loader_closes_if_process_cannot_start(self) -> None:
+        application = QApplication.instance() or QApplication([])
+        window = MainWindow()
+        window.show()
+        with patch(
+            "desktop.main_window.services.action_command",
+            return_value=["/this/command/does/not/exist"],
+        ):
+            window.start_action("refresh", assume_yes=True)
+            self.assertIsNotNone(window.inventory_refresh_dialog)
+            self.assertFalse(window.process.waitForStarted(2000))
+            application.processEvents()
+            self.assertIsNone(window.inventory_refresh_dialog)
+            self.assertEqual(window.process.state(), QProcess.ProcessState.NotRunning)
+        window.close()
+        window.deleteLater()
+        application.processEvents()
+
+    def test_technology_details_offer_release_reference_for_saved_version(self) -> None:
+        application = QApplication.instance() or QApplication([])
+        dialog = InventoryTechnologiesDialog({
+            "id": "sample", "path": "/sample",
+            "manual_technologies": [{
+                "category": "runtimes", "name": "PHP", "version": ">=7.2",
+            }],
+        }, [])
+        self.assertFalse(dialog.release_reference_button.isEnabled())
+        dialog.inventory_table.selectRow(0)
+        application.processEvents()
+        self.assertTrue(dialog.release_reference_button.isEnabled())
+        def fill_reference(reference_dialog):
+            fields = reference_dialog.findChildren(QLineEdit)
+            fields[0].setText("7.2.0")
+            fields[1].setText("2017-11-30")
+            fields[2].setText("https://www.php.net/releases/7_2_0.php")
+            return QDialog.DialogCode.Accepted
+
+        with patch(
+            "desktop.inventory_technologies_dialog.services.release_reference",
+            return_value={},
+        ), patch(
+            "desktop.inventory_technologies_dialog.services.save_release_reference",
+        ) as save, patch(
+            "desktop.inventory_technologies_dialog.QDialog.exec", fill_reference,
+        ):
+            dialog._edit_release_reference()
+        save.assert_called_once()
+        self.assertTrue(dialog.reference_updated)
+        dialog.close()
+        dialog.deleteLater()
+        application.processEvents()
+
+    def test_resizable_dialogs_expose_maximize_button(self) -> None:
+        application = QApplication.instance() or QApplication([])
+        details = InventoryTechnologiesDialog({"id": "sample"}, [])
+        notice = EulaDialog("Notice", "1")
+        for dialog in (details, notice):
+            self.assertTrue(
+                dialog.windowFlags() & Qt.WindowType.WindowMaximizeButtonHint
+            )
+            dialog.close()
+            dialog.deleteLater()
+        application.processEvents()
+
+    def test_actionable_controls_show_pointer_cursor_and_disabled_buttons_do_not(self) -> None:
+        application = QApplication.instance() or QApplication([])
+        window = MainWindow()
+        controls = (
+            window.scan_selected_button,
+            window.baseline_select_all,
+            window.provider_combo,
+            window.run_tabs.tabBar(),
+        )
+        for control in controls:
+            application.sendEvent(control, QEvent(QEvent.Type.Enter))
+            self.assertEqual(control.cursor().shape(), Qt.CursorShape.PointingHandCursor)
+        window.scan_selected_button.setEnabled(False)
+        self.assertNotEqual(
+            window.scan_selected_button.cursor().shape(), Qt.CursorShape.PointingHandCursor,
+        )
+        self.assertNotEqual(
+            window.technology_baseline_filter.cursor().shape(),
+            Qt.CursorShape.PointingHandCursor,
+        )
+        window.close()
+        window.deleteLater()
+        application.processEvents()
+
     def test_stop_assistant_terminates_active_request_without_saving_partial_reply(self) -> None:
         application = QApplication.instance() or QApplication([])
         window = MainWindow()
@@ -1098,6 +1214,70 @@ class DesktopWindowTest(unittest.TestCase):
         save.assert_called_once_with({
             "/private/api": {"enabled": True, "preferred_ai": "codex"},
         })
+        window.close()
+        window.deleteLater()
+        application.processEvents()
+
+    def test_shared_technology_columns_are_resizable_and_keep_full_text(self) -> None:
+        application = QApplication.instance() or QApplication([])
+        window = MainWindow()
+        window.resize(980, 680)
+        window.show()
+        window.inventory_tabs.setCurrentIndex(1)
+        window.navigation.setCurrentRow(2)
+        application.processEvents()
+
+        for view in (window.inventory_technology_view, window.run_technology_view):
+            header = view.tree.header()
+            self.assertTrue(all(
+                header.sectionResizeMode(column) == QHeaderView.ResizeMode.Interactive
+                for column in range(view.tree.columnCount())
+            ))
+            self.assertFalse(header.stretchLastSection())
+            header.resizeSection(7, 360)
+            self.assertEqual(header.sectionSize(7), 360)
+            self.assertGreater(view.tree.horizontalScrollBar().maximum(), 0)
+            item = view.tree.topLevelItem(0)
+            if item is not None and item.data(0, Qt.ItemDataRole.UserRole):
+                self.assertEqual(item.toolTip(7), item.text(7))
+
+        window.load_inventory()
+        window.load_initialization_scope()
+        self.assertEqual(window.inventory_technology_view.tree.header().sectionSize(7), 360)
+        self.assertEqual(window.run_technology_view.tree.header().sectionSize(7), 360)
+        window.close()
+        window.deleteLater()
+        application.processEvents()
+
+    def test_all_desktop_tables_have_resizable_columns(self) -> None:
+        application = QApplication.instance() or QApplication([])
+        window = MainWindow()
+        dialog = InventoryTechnologiesDialog(
+            {"id": "sample", "path": "/sample"}, [], window,
+        )
+        for owner in (window, dialog):
+            views = owner.findChildren(QTableWidget) + owner.findChildren(QTreeWidget)
+            self.assertTrue(views)
+            for view in views:
+                header = (
+                    view.horizontalHeader() if isinstance(view, QTableWidget)
+                    else view.header()
+                )
+                self.assertFalse(header.stretchLastSection())
+                self.assertTrue(all(
+                    header.sectionResizeMode(column) == QHeaderView.ResizeMode.Interactive
+                    for column in range(header.count())
+                ), view.objectName())
+                visible = next(
+                    (column for column in range(header.count())
+                     if not header.isSectionHidden(column)), None,
+                )
+                if visible is not None:
+                    width = header.sectionSize(visible)
+                    header.resizeSection(visible, width + 30)
+                    self.assertEqual(header.sectionSize(visible), width + 30)
+        dialog.close()
+        dialog.deleteLater()
         window.close()
         window.deleteLater()
         application.processEvents()
